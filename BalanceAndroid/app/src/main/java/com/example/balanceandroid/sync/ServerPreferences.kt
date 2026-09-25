@@ -4,26 +4,27 @@ import android.content.Context
 import java.net.URI
 import java.security.MessageDigest
 import java.util.UUID
+import androidx.core.content.edit
 
 class ServerPreferences(context: Context) {
     private val values = context.getSharedPreferences("balance_settings", Context.MODE_PRIVATE)
 
     var serverUrl: String
         get() = values.getString("server_url", "") ?: ""
-        set(value) { values.edit().putString("server_url", value).apply() }
+        set(value) { values.edit { putString("server_url", value) } }
     var email: String
         get() = values.getString("server_email", "") ?: ""
-        set(value) { values.edit().putString("server_email", value).apply() }
+        set(value) { values.edit { putString("server_email", value) } }
     var currency: String
         get() = values.getString("currency", "RUB") ?: "RUB"
-        set(value) { values.edit().putString("currency", value).apply() }
+        set(value) { values.edit { putString("currency", value) } }
     var theme: String
         get() = values.getString("theme", "system") ?: "system"
-        set(value) { values.edit().putString("theme", value).apply() }
+        set(value) { values.edit { putString("theme", value) } }
 
     val deviceId: String
         get() = values.getString("device_id", null) ?: UUID.randomUUID().toString().also {
-            values.edit().putString("device_id", it).apply()
+            values.edit { putString("device_id", it) }
         }
 
     fun normalizeServer(input: String): String {
@@ -45,11 +46,21 @@ class ServerPreferences(context: Context) {
     }
 
     fun cursor(scope: String): Long = values.getLong("cursor_${hash(scope)}", 0).coerceAtLeast(0)
-    fun setCursor(scope: String, cursor: Long) = values.edit().putLong("cursor_${hash(scope)}", cursor).apply()
+    fun setCursor(scope: String, cursor: Long) = values.edit {
+        putLong(
+            "cursor_${hash(scope)}",
+            cursor
+        )
+    }
     fun lastPush(scope: String): Long = values.getLong("push_${hash(scope)}", 0)
-    fun setLastPush(scope: String, value: Long) = values.edit().putLong("push_${hash(scope)}", value).apply()
+    fun setLastPush(scope: String, value: Long) = values.edit {
+        putLong(
+            "push_${hash(scope)}",
+            value
+        )
+    }
     fun resetSync(scope: String) {
-        values.edit().remove("cursor_${hash(scope)}").remove("push_${hash(scope)}").apply()
+        values.edit { remove("cursor_${hash(scope)}").remove("push_${hash(scope)}") }
     }
 
     private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")

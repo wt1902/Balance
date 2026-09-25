@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.DirectionsRun
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
@@ -26,11 +29,9 @@ import androidx.compose.material.icons.filled.Coffee
 import androidx.compose.material.icons.filled.Construction
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.DirectionsCar
-import androidx.compose.material.icons.filled.DirectionsRun
-import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Eco
-import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Fastfood
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Flight
 import androidx.compose.material.icons.filled.Home
@@ -42,7 +43,6 @@ import androidx.compose.material.icons.filled.LocalGasStation
 import androidx.compose.material.icons.filled.LocalGroceryStore
 import androidx.compose.material.icons.filled.MedicalServices
 import androidx.compose.material.icons.filled.Medication
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.MusicNote
@@ -75,10 +75,13 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.balanceandroid.data.CategoryDesign
 import com.example.balanceandroid.data.CategoryTotal
+import com.example.balanceandroid.ui.theme.BalanceGreen
+import com.example.balanceandroid.ui.theme.BalanceTheme
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -148,12 +151,12 @@ fun iconFor(name: String): ImageVector = when (name) {
     "printer.fill" -> Icons.Default.Print
     "pawprint.fill" -> Icons.Default.Pets
     "leaf.fill" -> Icons.Default.Eco
-    "figure.walk" -> Icons.Default.DirectionsWalk
-    "figure.run" -> Icons.Default.DirectionsRun
+    "figure.walk" -> Icons.AutoMirrored.Filled.DirectionsWalk
+    "figure.run" -> Icons.AutoMirrored.Filled.DirectionsRun
     "dumbbell.fill" -> Icons.Default.FitnessCenter
     "cross.case.fill", "stethoscope" -> Icons.Default.MedicalServices
     "pills.fill" -> Icons.Default.Medication
-    "book.fill" -> Icons.Default.MenuBook
+    "book.fill" -> Icons.AutoMirrored.Filled.MenuBook
     "school", "graduationcap.fill" -> Icons.Default.School
     "laptopcomputer" -> Icons.Default.Laptop
     "briefcase.fill" -> Icons.Default.Work
@@ -227,3 +230,34 @@ fun periodBounds(months: Int, now: Long = System.currentTimeMillis()): Pair<Long
     val end = currentStart.plusMonths(1)
     return start.toInstant().toEpochMilli() to end.toInstant().toEpochMilli()
 }
+
+@Preview(name = "Metric Card", showBackground = true)
+@Composable
+fun MetricCardPreview() {
+    BalanceTheme(theme = "dark") {
+        MetricCard("Доходы", "120 000 ₽", BalanceGreen)
+    }
+}
+
+@Preview(name = "Category Badge", showBackground = true)
+@Composable
+fun CategoryBadgePreview() {
+    BalanceTheme(theme = "dark") {
+        CategoryBadge(CategoryDesign("Продукты", "cart.fill", "🛒", "orange", "expense"))
+    }
+}
+
+@Preview(name = "Spending Bars", showBackground = true)
+@Composable
+fun SpendingBarsPreview() {
+    BalanceTheme(theme = "dark") {
+        SpendingBars(
+            listOf(
+                CategoryTotal("Продукты", "cart.fill", "🛒", "orange", 12500.0),
+                CategoryTotal("Кафе", "fork.knife", "☕", "indigo", 4200.0),
+                CategoryTotal("Транспорт", "car.fill", "🚗", "purple", 3100.0),
+            )
+        )
+    }
+}
+

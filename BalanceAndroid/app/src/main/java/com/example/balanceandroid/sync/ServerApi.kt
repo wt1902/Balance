@@ -66,7 +66,7 @@ class ServerApi(
         return try {
             parseSession(post("v1/auth/refresh", JSONObject().put("refreshToken", session.refreshToken), null))
                 .also { sessions.save(it) }
-        } catch (error: Throwable) {
+        } catch (_: Throwable) {
             sessions.clear()
             throw ServerException("Сессия истекла. Войдите снова.")
         }

@@ -31,6 +31,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,14 +54,14 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun TransactionEditorDialog(
     model: MainViewModel,
-    state: FinanceUiState,
+//    state: FinanceUiState,
     existing: TransactionEntity?,
     onDismiss: () -> Unit,
 ) {
     var amount by remember(existing?.id) { mutableStateOf(existing?.amount?.toString().orEmpty()) }
     var kind by remember(existing?.id) { mutableStateOf(existing?.kindRawValue ?: "expense") }
     var note by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
-    var date by remember(existing?.id) { mutableStateOf(existing?.date ?: System.currentTimeMillis()) }
+    var date by remember(existing?.id) { mutableLongStateOf(existing?.date ?: System.currentTimeMillis()) }
     val categories = model.categories(kind)
     var categoryName by remember(existing?.id) { mutableStateOf(existing?.categoryName ?: categories.first().name) }
     val selected = categories.firstOrNull { it.name == categoryName } ?: categories.first()

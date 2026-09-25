@@ -32,8 +32,8 @@ class SyncRepository(
     val status: StateFlow<SyncStatus> = mutableStatus
     val session: StateFlow<ServerSession?> = mutableSession
 
-    fun serverUrl(): String = preferences.serverUrl
-    fun savedEmail(): String = preferences.email
+//    fun serverUrl(): String = preferences.serverUrl
+//    fun savedEmail(): String = preferences.email
 
     suspend fun changeServer(value: String): String {
         return try {

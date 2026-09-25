@@ -10,6 +10,7 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import androidx.core.content.edit
 
 data class ServerSession(
     val accessToken: String,
@@ -33,10 +34,10 @@ class SecureSessionStore(context: Context) {
             .toString().toByteArray()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, secretKey())
-        preferences.edit()
-            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString("data", Base64.encodeToString(cipher.doFinal(source), Base64.NO_WRAP))
-            .apply()
+        preferences.edit {
+            putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+                .putString("data", Base64.encodeToString(cipher.doFinal(source), Base64.NO_WRAP))
+        }
     }
 
     fun load(): ServerSession? = runCatching {
@@ -58,7 +59,7 @@ class SecureSessionStore(context: Context) {
     }
 
     fun clear() {
-        preferences.edit().clear().apply()
+        preferences.edit { clear() }
     }
 
     private fun secretKey(): SecretKey {
