@@ -145,6 +145,7 @@ Roboto и CanvasKit раздаются вместе с Web-сборкой: сб�
 - [SYNC_PROTOCOL.md](SYNC_PROTOCOL.md) — wire-протокол, как его реализует Flutter-клиент.
 - [FEATURE_PARITY.md](FEATURE_PARITY.md) — аудит переноса функций из нативных клиентов.
 - [VALIDATION.md](VALIDATION.md) — выполненные проверки и ограничения.
+- [ROADMAP.md](ROADMAP.md) — идеи новых функций и приоритеты.
 - [docs/ecosystem/](docs/ecosystem/) — общий контракт экосистемы Balance: [протокол синхронизации](docs/ecosystem/SYNC_PROTOCOL.md), [модель данных](docs/ecosystem/DATA_MODEL.md), [безопасность](docs/ecosystem/SECURITY.md).
 - [AGENTS.md](AGENTS.md) — правила для разработчиков и AI-агентов.
 
