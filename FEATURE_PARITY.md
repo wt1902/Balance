@@ -158,3 +158,7 @@ Flutter-only, no wire or model change; templates are device preferences (`quickT
 - Repeat and save-as-template from a transaction's menu (not for balance adjustments); «Быстрый ввод» chips show saved templates and up to three presets repeated at least twice in the last 90 days.
 - App icon shortcuts «Расход»/«Доход» via `quick_actions` (Android, iOS). Android also has a Quick Settings tile and a home-screen widget; both open the editor through the `balance/launch` method channel (`initialAction`, `action`, `updateWidgets`).
 - The widget reads preformatted `flutter.widget.*` strings that AppStore writes after every operation when they change; background sync updates them too, and the widget refreshes on its 30-minute schedule. No iOS widget yet.
+
+## Privacy 4.2
+
+Flutter-only, device-local, never synced: optional app lock with a 4–8 digit PIN (salted PBKDF2-HMAC-SHA256 in secure storage, throttled after five wrong attempts) and biometrics via `local_auth` (Android, iOS, macOS, Windows Hello; not Linux or Web). The lock shows at start and after a chosen time in the background; the interface stays offstage, out of the accessibility tree, while locked. «Скрывать в недавних приложениях» covers the app-switcher snapshot (Android 13+ `setRecentsScreenshotEnabled`, `FLAG_SECURE` below; a Flutter cover on iOS). Android's MainActivity is now a `FlutterFragmentActivity` with an AppCompat launch theme, as `local_auth` requires.

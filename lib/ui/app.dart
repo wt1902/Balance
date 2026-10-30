@@ -9,14 +9,19 @@ import '../domain/appearance.dart';
 import '../domain/templates.dart';
 import 'app_theme.dart';
 import 'data_tools.dart';
+import '../services/app_lock.dart';
 import '../services/app_store.dart';
 import '../services/launch_actions.dart';
 import 'design.dart';
 import 'editors.dart';
+import 'privacy.dart';
 
 class BalanceApp extends StatelessWidget {
-  const BalanceApp({super.key, required this.store});
+  const BalanceApp({super.key, required this.store, this.lock});
   final AppStore store;
+
+  /// App lock and privacy cover; absent in tests that do not need it.
+  final AppLock? lock;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
@@ -39,16 +44,19 @@ class BalanceApp extends StatelessWidget {
           : store.theme == 'light'
           ? ThemeMode.light
           : ThemeMode.system,
+      builder: (context, child) =>
+          PrivacyGate(lock: lock, child: child ?? const SizedBox.shrink()),
       home: store.ready
-          ? BalanceShell(store: store)
+          ? BalanceShell(store: store, lock: lock)
           : const Scaffold(body: Center(child: CircularProgressIndicator())),
     ),
   );
 }
 
 class BalanceShell extends StatefulWidget {
-  const BalanceShell({super.key, required this.store});
+  const BalanceShell({super.key, required this.store, this.lock});
   final AppStore store;
+  final AppLock? lock;
   @override
   State<BalanceShell> createState() => _BalanceShellState();
 }
@@ -1423,6 +1431,18 @@ class _BalanceShellState extends State<BalanceShell> {
         ],
       ),
     ),
+    if (widget.lock != null) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Приватность'),
+            PrivacyPanel(lock: widget.lock!, run: run),
+          ],
+        ),
+      ),
+    ],
     const SizedBox(height: 20),
     Panel(
       child: Column(

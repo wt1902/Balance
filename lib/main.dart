@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
     show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart' show rootBundle;
+import 'services/app_lock.dart';
 import 'services/app_store.dart';
 import 'services/background.dart';
 import 'ui/app.dart';
@@ -14,7 +15,10 @@ Future<void> main() async {
     ], await rootBundle.loadString('assets/fonts/LICENSE.txt'));
   });
   final store = AppStore();
+  final lock = AppLock();
   try {
+    // The lock is known before the first frame, so nothing shows unlocked.
+    await lock.initialize();
     await store.initialize();
     try {
       await configureBackgroundSync();
@@ -22,7 +26,7 @@ Future<void> main() async {
       store.error =
           'Не удалось включить фоновую синхронизацию. Синхронизация при открытии приложения доступна.';
     }
-    runApp(BalanceApp(store: store));
+    runApp(BalanceApp(store: store, lock: lock));
   } catch (error) {
     runApp(
       MaterialApp(

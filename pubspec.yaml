@@ -25,6 +25,8 @@ dependencies:
   balance_runtime:
     path: packages/balance_runtime
   quick_actions: ^1.1.1
+  local_auth: ^3.0.2
+  crypto: ^3.0.8
 dev_dependencies:
   flutter_test:
     sdk: flutter
