@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 
-String money(int minor, String currency) => NumberFormat.currency(
-  locale: 'ru_RU',
-  name: currency,
-  symbol:
-      {'RUB': '₽', 'USD': r'$', 'EUR': '€', 'SEK': 'kr'}[currency] ?? currency,
-).format(minor / 100);
+export '../domain/money_format.dart';
+
 int? parseAmount(String value, {bool signed = false}) {
   final clean = value
       .replaceAll(RegExp(r'[\s\u00a0\u202f]'), '')

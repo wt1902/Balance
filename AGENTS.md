@@ -42,17 +42,24 @@ BalanceFlutter/
 │   ├── main.dart
 │   ├── domain/
 │   │   ├── finance.dart     # модели, FinanceMath, категории, CSV
+│   │   ├── backup.dart      # формат JSON-копии, план восстановления, карантин
+│   │   ├── statement_import.dart # разбор выписок CSV/OFX и своего CSV
+│   │   ├── templates.dart   # шаблоны быстрого ввода и частые траты
+│   │   ├── money_format.dart # money(): формат сумм для UI и виджета
 │   │   └── appearance.dart  # пресеты оформления (ColorPreset)
 │   ├── services/
 │   │   ├── app_store.dart   # AppStore: состояние, CRUD, очередь изменений, сессии, sync
 │   │   ├── sync_api.dart    # SyncApi: HTTP-клиент /v1 API
 │   │   ├── storage*.dart    # Sembast (native) / IndexedDB (web) снапшоты
 │   │   ├── runtime_lock*.dart # межпроцессная/межвкладочная блокировка
-│   │   └── background.dart  # фоновая синхронизация (WorkManager, Android)
+│   │   ├── background.dart  # фоновая синхронизация (WorkManager, Android)
+│   │   ├── launch_actions.dart # канал balance/launch: плитка, виджет Android
+│   │   └── widget_summary.dart # строки для виджета главного экрана
 │   └── ui/
 │       ├── app.dart         # BalanceApp, BalanceShell, экраны
 │       ├── editors.dart     # формы операции, категории, бюджета
 │       ├── design.dart      # переиспользуемые виджеты
+│       ├── data_tools.dart  # копия, импорт выписок, предпросмотры, карантин
 │       └── app_theme.dart   # темы и пресеты Material 3
 ├── packages/balance_runtime/ # плагин: file lock на Android (Java + JVM-тесты)
 ├── test/                     # unit, store, HTTP, widget и screenshot-тесты
@@ -78,6 +85,11 @@ BalanceFlutter/
   данных — только через методы `AppStore`.
 - Платформенный код (`android/`, `ios/`, …) трогай только когда это
   действительно нужно; analyzer его не проверяет.
+  Нативные точки входа Android: `QuickAddTileService` (плитка Quick
+  Settings) и `BalanceWidgetProvider` (виджет) в
+  `android/app/src/main/kotlin/com/balance/balance/`; связь с Dart — канал
+  `balance/launch` в `MainActivity`. Виджет читает строки `flutter.widget.*`,
+  которые пишет `AppStore`; расчёты для них — в `FinanceMath`.
 
 ### 2. Деньги и даты
 

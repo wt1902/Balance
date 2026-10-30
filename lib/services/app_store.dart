@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,10 +9,13 @@ import 'package:uuid/uuid.dart';
 
 import '../domain/backup.dart';
 import '../domain/finance.dart';
+import '../domain/templates.dart';
 import '../domain/appearance.dart';
+import 'launch_actions.dart';
 import 'storage.dart';
 import 'runtime_lock.dart';
 import 'sync_api.dart';
+import 'widget_summary.dart';
 
 class AuthSession {
   AuthSession(this.data) {
@@ -77,6 +81,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, Map<String, dynamic>> _tombstones = {};
   final Map<String, Map<String, dynamic>> _dirty = {};
   final List<QuarantineEntry> _quarantine = [];
+  final List<TransactionTemplate> _templates = [];
+  Map<String, String>? _widgetSummary;
   int _skippedFromServer = 0;
 
   List<TransactionRecord> get transactions =>
@@ -92,6 +98,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         sum + (t.kindRawValue == 'income' ? t.amountMinor : -t.amountMinor),
   );
   int get pendingChangeCount => _dirty.length;
+
+  /// Device-local quick-entry presets, newest first.
+  List<TransactionTemplate> get templates => List.unmodifiable(_templates);
 
   /// Records set aside because they could not be read (see QuarantineEntry).
   List<QuarantineEntry> get quarantine => List.unmodifiable(_quarantine);
@@ -110,7 +119,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       if (!_injectedStorage) await _runtimeLock.acquire();
       try {
         if (ready) await _reloadSharedState();
-        return await body();
+        final value = await body();
+        await _publishWidgetSummary();
+        return value;
       } finally {
         if (!_injectedStorage) await _runtimeLock.release();
       }
@@ -138,6 +149,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     themePreset = ColorPreset.fromId(_preferences!.getString('themePreset')).id;
     _deviceId = _preferences!.getString('deviceId') ?? newId();
     await _preferences!.setString('deviceId', _deviceId);
+    _loadTemplates();
     _storage ??= await LedgerStorage.open();
     await _restoreSession();
     await _loadScope();
@@ -164,6 +176,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     theme = _preferences!.getString('theme') ?? 'system';
     themePreset = ColorPreset.fromId(_preferences!.getString('themePreset')).id;
     _deviceId = _preferences!.getString('deviceId') ?? _deviceId;
+    _loadTemplates();
     await _restoreSession();
     await _loadScope();
     _notify();
@@ -899,6 +912,70 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         if (added > 0) await _edited();
         return added;
       });
+
+  void _loadTemplates() {
+    _templates.clear();
+    try {
+      final raw = _preferences!.getString('quickTemplates');
+      for (final item in raw == null ? const [] : jsonDecode(raw) as List) {
+        try {
+          _templates.add(
+            TransactionTemplate.fromJson(
+              Map<String, dynamic>.from(item as Map),
+            ),
+          );
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveTemplates() => _preferences!.setString(
+    'quickTemplates',
+    jsonEncode(_templates.map((t) => t.toJson()).toList()),
+  );
+
+  /// Adds or moves a template to the front; an identical preset is replaced.
+  Future<void> saveTemplate(TransactionTemplate template) => _exclusive(
+    () async {
+      if (template.categoryName.trim().isEmpty) {
+        throw ArgumentError('Выберите категорию');
+      }
+      _templates.removeWhere(
+        (t) => t.id == template.id || t.signature == template.signature,
+      );
+      _templates.insert(0, template);
+      if (_templates.length > 12) _templates.removeRange(12, _templates.length);
+      await _saveTemplates();
+      _notify();
+    },
+  );
+
+  Future<void> deleteTemplate(String id) => _exclusive(() async {
+    _templates.removeWhere((t) => t.id == id);
+    await _saveTemplates();
+    _notify();
+  });
+
+  /// Never fails the operation it follows: the widget is a convenience.
+  Future<void> _publishWidgetSummary() async {
+    if (_preferences == null) return;
+    try {
+      final next = widgetSummary(
+        transactions: _transactions.values,
+        budgets: _budgets.values,
+        currency: currency,
+        now: DateTime.now(),
+      );
+      if (mapEquals(next, _widgetSummary)) return;
+      for (final entry in next.entries) {
+        await _preferences!.setString(entry.key, entry.value);
+      }
+      _widgetSummary = next;
+      // Not awaited: the reply may never come (background engine, tests), and
+      // the serialized store queue must not wait on a widget refresh.
+      unawaited(LaunchActions.updateWidgets());
+    } catch (_) {}
+  }
 
   Future<void> setCurrency(String value) => _exclusive(() async {
     currency = value;

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/finance.dart';
+import '../domain/templates.dart';
 import 'design.dart';
 
 const _uuid = Uuid();
@@ -17,8 +18,16 @@ Future<T?> editDialog<T>(BuildContext context, Widget child) => showDialog<T>(
 );
 
 class TransactionEditor extends StatefulWidget {
-  const TransactionEditor({super.key, this.existing, required this.categories});
+  const TransactionEditor({
+    super.key,
+    this.existing,
+    this.draft,
+    required this.categories,
+  });
   final TransactionRecord? existing;
+
+  /// Prefills a new transaction (repeat, template, app shortcut).
+  final TransactionTemplate? draft;
   final List<CategoryRecord> categories;
   @override
   State<TransactionEditor> createState() => _TransactionEditorState();
@@ -43,15 +52,16 @@ class _TransactionEditorState extends State<TransactionEditor> {
   void initState() {
     super.initState();
     final t = widget.existing;
+    final d = widget.draft;
+    final amountMinor = t?.amountMinor ?? d?.amountMinor ?? 0;
     amount = TextEditingController(
-      text: t == null ? '' : amountInput(t.amountMinor),
+      text: amountMinor > 0 ? amountInput(amountMinor) : '',
     );
-    note = TextEditingController(text: t?.note ?? '');
+    note = TextEditingController(text: t?.note ?? d?.note ?? '');
     date = t?.date.toLocal() ?? DateTime.now();
-    kind = t?.kindRawValue ?? 'expense';
-    selected = t == null
-        ? BuiltInCategories.expense.first
-        : CategoryRecord(
+    kind = t?.kindRawValue ?? d?.kindRawValue ?? 'expense';
+    selected = t != null
+        ? CategoryRecord(
             id: 'archived',
             name: t.categoryName,
             icon: t.categoryIcon,
@@ -60,7 +70,19 @@ class _TransactionEditorState extends State<TransactionEditor> {
             kindRawValue: kind,
             createdAt: date,
             updatedAt: date,
-          );
+          )
+        : d != null
+        ? CategoryRecord(
+            id: 'draft',
+            name: d.categoryName,
+            icon: d.categoryIcon,
+            emoji: d.categoryEmoji,
+            colorName: d.categoryColorName,
+            kindRawValue: kind,
+            createdAt: date,
+            updatedAt: date,
+          )
+        : BuiltInCategories.expense.first;
   }
 
   @override

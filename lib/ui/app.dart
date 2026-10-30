@@ -3,11 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
+import 'package:quick_actions/quick_actions.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
+import '../domain/templates.dart';
 import 'app_theme.dart';
 import 'data_tools.dart';
 import '../services/app_store.dart';
+import '../services/launch_actions.dart';
 import 'design.dart';
 import 'editors.dart';
 
@@ -92,12 +95,122 @@ class _BalanceShellState extends State<BalanceShell> {
     }
   }
 
-  Future<void> editTransaction([TransactionRecord? value]) async {
+  @override
+  void initState() {
+    super.initState();
+    LaunchActions.listen(quickAdd);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final action = await LaunchActions.initialAction();
+      if (action != null && mounted) await quickAdd(action);
+    });
+    _setupShortcuts();
+  }
+
+  /// App icon shortcuts («Расход», «Доход») on Android and iOS.
+  Future<void> _setupShortcuts() async {
+    if (kIsWeb ||
+        !(defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      const actions = QuickActions();
+      await actions.initialize((type) {
+        if (mounted) quickAdd(type);
+      });
+      await actions.setShortcutItems(const [
+        ShortcutItem(type: 'expense', localizedTitle: 'Расход'),
+        ShortcutItem(type: 'income', localizedTitle: 'Доход'),
+      ]);
+    } catch (_) {
+      // Shortcuts are optional; the plugin is absent in tests.
+    }
+  }
+
+  /// Entry from a shortcut, the Quick Settings tile or the home widget.
+  Future<void> quickAdd(String action) async {
+    if (!mounted || (action != 'expense' && action != 'income')) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    await editTransaction(
+      null,
+      TransactionTemplate.blank(TransactionKind.parse(action)),
+    );
+  }
+
+  Future<void> editTransaction([
+    TransactionRecord? value,
+    TransactionTemplate? draft,
+  ]) async {
     final result = await editDialog<TransactionRecord>(
       context,
-      TransactionEditor(existing: value, categories: store.categories),
+      TransactionEditor(
+        existing: value,
+        draft: draft,
+        categories: store.categories,
+      ),
     );
     if (result != null) await run(() => store.saveTransaction(result));
+  }
+
+  Widget quickEntry() {
+    final saved = store.templates;
+    final known = {for (final t in saved) t.signature};
+    final frequent = TransactionTemplate.frequent(
+      store.transactions,
+      DateTime.now(),
+    ).where((t) => !known.contains(t.signature));
+    if (saved.isEmpty && frequent.isEmpty) return const SizedBox.shrink();
+    Widget chip(TransactionTemplate t, {required bool isSaved}) {
+      final amount = t.amountMinor > 0
+          ? ' · ${money(t.amountMinor, store.currency)}'
+          : '';
+      // No chip tooltip: its long-press recognizer would swallow deletion.
+      return Semantics(
+        hint: isSaved
+            ? 'Шаблон. Удерживайте, чтобы удалить'
+            : 'Часто повторяется',
+        child: GestureDetector(
+          onLongPress: isSaved ? () => removeTemplate(t) : null,
+          onSecondaryTap: isSaved ? () => removeTemplate(t) : null,
+          child: ActionChip(
+            avatar: CategoryAvatar(
+              icon: t.categoryIcon,
+              emoji: t.categoryEmoji,
+              color: t.categoryColorName,
+              size: 24,
+            ),
+            label: Text('${t.title}$amount', overflow: TextOverflow.ellipsis),
+            onPressed: () => editTransaction(null, t),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 28),
+        sectionTitle('Быстрый ввод'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in saved) chip(t, isSaved: true),
+            for (final t in frequent) chip(t, isSaved: false),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> removeTemplate(TransactionTemplate t) async {
+    if (await confirmDelete(
+      context,
+      'Удалить шаблон «${t.title}»?',
+      message: 'Операции не изменятся, удалится только шаблон.',
+    )) {
+      await run(() => store.deleteTemplate(t.id));
+    }
   }
 
   Future<void> editCategory([CategoryRecord? value]) async {
@@ -468,6 +581,7 @@ class _BalanceShellState extends State<BalanceShell> {
           ],
         ),
       ),
+      quickEntry(),
       const SizedBox(height: 20),
       metricRow([
         Metric(
@@ -546,13 +660,33 @@ class _BalanceShellState extends State<BalanceShell> {
           onSelected: (v) async {
             if (v == 'edit') {
               await editTransaction(t);
+            } else if (v == 'repeat') {
+              await editTransaction(
+                null,
+                TransactionTemplate.fromTransaction('repeat', t),
+              );
+            } else if (v == 'template') {
+              await run(
+                () => store.saveTemplate(
+                  TransactionTemplate.fromTransaction(AppStore.newId(), t),
+                ),
+                success: 'Шаблон сохранён в «Быстрый ввод»',
+              );
             } else if (await confirmDelete(context, 'Удалить операцию?')) {
               await run(() => store.deleteTransaction(t.id));
             }
           },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'edit', child: Text('Изменить')),
-            PopupMenuItem(value: 'delete', child: Text('Удалить')),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'edit', child: Text('Изменить')),
+            // A balance adjustment is not spending to repeat or reuse.
+            if (!t.isBalanceAdjustment) ...const [
+              PopupMenuItem(value: 'repeat', child: Text('Повторить')),
+              PopupMenuItem(
+                value: 'template',
+                child: Text('Сохранить как шаблон'),
+              ),
+            ],
+            const PopupMenuItem(value: 'delete', child: Text('Удалить')),
           ],
         ),
       ],

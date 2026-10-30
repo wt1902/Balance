@@ -150,3 +150,11 @@ Flutter-only additions; the wire protocol is unchanged and there is no native eq
 - Local quarantine of damaged records and failed pulled changes, with a JSON report and clear action in Settings → «Данные».
 - Bank statement import: CSV (auto delimiter and encoding, Т-Банк preset, column mapping) and OFX 1.x/2.x, with stable UUIDv5 ids so re-import adds nothing. Balance's own CSV export is recognized by its header and imported with its original ids, adjustment flags and category design.
 - Restore preview: a dry run lists what each backup record would do (add, update, delete, or skip with a reason) and only the selected records are restored.
+
+## Quick entry 4.2
+
+Flutter-only, no wire or model change; templates are device preferences (`quickTemplates`) like theme and currency.
+
+- Repeat and save-as-template from a transaction's menu (not for balance adjustments); «Быстрый ввод» chips show saved templates and up to three presets repeated at least twice in the last 90 days.
+- App icon shortcuts «Расход»/«Доход» via `quick_actions` (Android, iOS). Android also has a Quick Settings tile and a home-screen widget; both open the editor through the `balance/launch` method channel (`initialAction`, `action`, `updateWidgets`).
+- The widget reads preformatted `flutter.widget.*` strings that AppStore writes after every operation when they change; background sync updates them too, and the widget refreshes on its 30-minute schedule. No iOS widget yet.

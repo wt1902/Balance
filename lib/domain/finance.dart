@@ -417,6 +417,24 @@ class FinanceMath {
         .fold(0, (value, item) => value + item.amountMinor);
   }
 
+  /// Limits and spending of the budgets of [now]'s local calendar month.
+  static ({int limitMinor, int usedMinor, int count}) monthBudgets(
+    Iterable<BudgetRecord> budgets,
+    Iterable<TransactionRecord> items,
+    DateTime now,
+  ) {
+    final local = now.toLocal();
+    var limit = 0, used = 0, count = 0;
+    for (final budget in budgets) {
+      final month = budget.monthStart.toLocal();
+      if (month.year != local.year || month.month != local.month) continue;
+      limit += budget.limitMinor;
+      used += budgetUsed(budget, items);
+      count++;
+    }
+    return (limitMinor: limit, usedMinor: used, count: count);
+  }
+
   static String escapeCsv(String value) => '"${value.replaceAll('"', '""')}"';
 
   /// The first five columns match the native clients' export; the rest make a
