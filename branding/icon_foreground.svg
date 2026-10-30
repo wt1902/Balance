@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Android adaptive icon foreground (108dp layer, artwork in the safe zone); background is
+       @color/ic_launcher_background. Same artwork as icon.svg: the in-app wallet mark in the «Лес» palette. Income (teal) and
+       expense (deep orange) cards stick out of the wallet. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#3f7d6b"/>
+      <stop offset="1" stop-color="#1a4a3e"/>
+    </linearGradient>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bdf7e3"/>
+      <stop offset="1" stop-color="#8fe6c9"/>
+    </linearGradient>
+    <linearGradient id="income" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#26b3a3"/>
+      <stop offset="1" stop-color="#00897b"/>
+    </linearGradient>
+    <linearGradient id="expense" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a5c"/>
+      <stop offset="1" stop-color="#f4511e"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0b2620" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+
+  <g transform="translate(512 512) scale(0.62) translate(-527 -508)">
+  <g filter="url(#shadow)">
+    <!-- cards behind the wallet; arrows match the app's income/expense icons -->
+    <g transform="rotate(-10 400 330)">
+      <rect x="236" y="176" width="320" height="300" rx="36" fill="url(#income)"/>
+      <path d="M454 236 L338 352 M338 262 V352 H428" fill="none" stroke="#ffffff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="rotate(10 624 330)">
+      <rect x="468" y="176" width="320" height="300" rx="36" fill="url(#expense)"/>
+      <path d="M570 352 L686 236 M596 236 H686 V326" fill="none" stroke="#ffffff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- wallet -->
+    <rect x="196" y="420" width="632" height="420" rx="72" fill="url(#body)"/>
+    <!-- clasp tab -->
+    <rect x="590" y="560" width="268" height="152" rx="76" fill="#116b57"/>
+    <circle cx="666" cy="636" r="30" fill="#bdf7e3"/>
+  </g>
+  </g>
+</svg>

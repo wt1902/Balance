@@ -138,7 +138,7 @@ Roboto и CanvasKit раздаются вместе с Web-сборкой: сб�
 - `test/`: расчёты, хранилище, HTTP-протокол, формы и адаптивные экраны.
 - `tool/integration_sync.dart`, `tool/run_integration.sh`: проверка с настоящим Go HTTP-сервером. Скрипту нужен исходный код BalanceServer: по умолчанию `../BalanceServer` рядом с этим репозиторием, иначе укажите путь в `BALANCE_SERVER_DIR`.
 - `packages/balance_runtime`: собственный плагин межпроцессной блокировки (Android/Web).
-- `branding/`: аватар репозитория и баннер README (SVG-исходники, PNG, `render.sh`).
+- `branding/`: иконка приложения, аватар репозитория и баннер README (SVG-исходники, PNG, `render.sh`).
 
 ## Документация
 
@@ -152,6 +152,7 @@ Roboto и CanvasKit раздаются вместе с Web-сборкой: сб�
 
 - Аватар (Gitea/GitHub): [`branding/avatar.png`](branding/avatar.png), 512×512. В Gitea: **Настройки репозитория → Аватар**.
 - Баннер README: [`branding/banner.png`](branding/banner.png), 1280×640; подходит и как social preview на GitHub.
-- После правки SVG перерисуйте PNG: `bash branding/render.sh` (нужен `resvg`).
+- Иконка приложения: [`branding/icon.svg`](branding/icon.svg). Кошелёк в палитре «Лес» с карточками доходов (↙) и расходов (↗), как в самом приложении. На Android есть adaptive icon (`branding/icon_foreground.svg`).
+- После правки SVG выполните `bash branding/render.sh` (нужны `resvg` и Pillow). Скрипт перерисует PNG и разложит иконку по всем платформам.
 
 Для Linux в пользовательской сессии нужен работающий Secret Service, например GNOME Keyring или KWallet с поддержкой Secret Service, и библиотека `libsecret-1-0`: через него `flutter_secure_storage` сохраняет токены. Если служба недоступна или связка ключей заблокирована, приложение сохраняет сессию только в памяти и показывает предупреждение; локальные финансовые записи сохраняются отдельно в Sembast. Для сборки нужны `clang cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev libjsoncpp-dev`.
