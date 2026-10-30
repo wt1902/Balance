@@ -251,4 +251,57 @@ void main() {
       'c',
     );
   });
+
+  test('own CSV export round-trips every transaction field', () {
+    final updated = DateTime.utc(2026, 3, 1, 12);
+    final records = [
+      TransactionRecord(
+        id: 'a1',
+        amountMinor: 123456,
+        date: DateTime.utc(2026, 2, 28, 21, 15, 30, 123),
+        categoryName: 'Кафе, бары',
+        categoryIcon: 'cup.and.saucer.fill',
+        categoryEmoji: '☕️',
+        categoryColorName: 'brown',
+        note: '=SUM(A1) "ужин"\nс друзьями',
+        updatedAt: updated,
+      ),
+      TransactionRecord(
+        id: 'adj',
+        amountMinor: 50,
+        date: DateTime.utc(2026, 2, 1),
+        categoryName: 'Корректировка',
+        note: '-сверка',
+        isBalanceAdjustment: true,
+        updatedAt: updated,
+      ),
+      TransactionRecord(
+        id: 'inc',
+        amountMinor: 1,
+        date: DateTime.utc(2026, 1, 1),
+        categoryName: 'Зарплата',
+        kindRawValue: 'income',
+        note: "'@важно",
+        updatedAt: updated,
+      ),
+    ];
+    final bytes = utf8.encode(FinanceMath.exportCsv(records));
+    final table = StatementImport.parseCsv(StatementImport.decode(bytes));
+    expect(StatementImport.isBalanceExport(table.first), isTrue);
+    expect(StatementImport.tbankMapping(table.first), isNull);
+    final result = StatementImport.readBalanceCsv(table);
+    expect(result.problems, isEmpty);
+    expect(result.format, 'Баланс, CSV');
+    final restored = {
+      for (final row in result.rows)
+        StatementImport.transactionId(row): StatementImport.toTransaction(
+          row,
+          StatementImport.suggestCategory(row, BuiltInCategories.expense),
+        ),
+    };
+    for (final original in records) {
+      final copy = restored[original.id]!;
+      expect(copy.payload(), original.payload(), reason: original.id);
+    }
+  });
 }

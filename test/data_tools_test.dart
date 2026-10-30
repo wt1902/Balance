@@ -136,6 +136,70 @@ void main() {
       reopened.dispose();
     });
 
+    test('preview lists every decision and changes nothing', () async {
+      final storage = MemorySnapshotStorage();
+      final store = await open(storage);
+      await store.saveTransaction(transaction('newer-here'));
+      await store.saveTransaction(transaction('to-delete'));
+      final before = json(storage.values.values.single);
+      final pendingBefore = store.pendingChangeCount;
+      final later = DateTime.now().toUtc().add(const Duration(days: 1));
+      final backup = json({
+        'format': backupFormat,
+        'version': backupVersion,
+        'data': {
+          'transactions': [
+            transaction('new-1').toJson(),
+            transaction('new-2').toJson(),
+            transaction('newer-here', updatedAt: DateTime.utc(2020)).toJson(),
+          ],
+          'tombstones': [
+            {
+              'entity': 'transaction',
+              'id': 'to-delete',
+              'deleted': true,
+              'updatedAt': later.toIso8601String(),
+            },
+            {
+              'entity': 'transaction',
+              'id': 'never-here',
+              'deleted': true,
+              'updatedAt': later.toIso8601String(),
+            },
+          ],
+        },
+      });
+      final plan = await store.previewBackup(backup);
+      final byKey = {for (final i in plan.items) i.key: i};
+      expect(byKey['transaction:new-1']!.action, BackupAction.add);
+      expect(byKey['transaction:newer-here']!.action, BackupAction.skip);
+      expect(byKey['transaction:newer-here']!.reason, isNotEmpty);
+      expect(byKey['transaction:to-delete']!.action, BackupAction.delete);
+      expect(byKey['transaction:to-delete']!.record, isA<TransactionRecord>());
+      expect(byKey.containsKey('transaction:never-here'), isFalse);
+      expect(plan.unchanged, 1);
+      expect(plan.actionable, hasLength(3));
+      // The dry run left memory and disk untouched.
+      expect(store.transactions.map((t) => t.id).toSet(), {
+        'newer-here',
+        'to-delete',
+      });
+      expect(store.pendingChangeCount, pendingBefore);
+      expect(json(storage.values.values.single), before);
+
+      final result = await store.restoreBackup(
+        backup,
+        only: {'transaction:new-2', 'transaction:to-delete'},
+      );
+      expect(result.added, 1);
+      expect(result.deleted, 1);
+      expect(store.transactions.map((t) => t.id).toSet(), {
+        'newer-here',
+        'new-2',
+      });
+      store.dispose();
+    });
+
     test('rejects foreign files and newer formats', () async {
       final store = await open(MemorySnapshotStorage());
       await expectLater(

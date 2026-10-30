@@ -16,6 +16,9 @@ class StatementRow {
     required this.description,
     required this.importKey,
     this.bankCategory = '',
+    this.id,
+    this.category,
+    this.isBalanceAdjustment = false,
   });
 
   final DateTime date;
@@ -27,6 +30,12 @@ class StatementRow {
 
   /// Stable within its source file, so a re-imported row gets the same id.
   final String importKey;
+
+  /// Set only for Balance's own CSV export, which carries the original id,
+  /// category design and adjustment flag.
+  final String? id;
+  final CategoryRecord? category;
+  final bool isBalanceAdjustment;
 }
 
 class StatementParseResult {
@@ -200,6 +209,71 @@ class StatementImport {
 
   static String _norm(String header) =>
       header.trim().toLowerCase().replaceAll('ё', 'е');
+
+  /// Balance's own lossless export (FinanceMath.exportCsv).
+  static bool isBalanceExport(List<String> header) {
+    final names = header.map((h) => h.trim()).toList();
+    return names.length >= FinanceMath.csvHeader.length &&
+        FinanceMath.csvHeader.every(names.contains);
+  }
+
+  static StatementParseResult readBalanceCsv(List<List<String>> table) {
+    final columns = {
+      for (var i = 0; i < table.first.length; i++) table.first[i].trim(): i,
+    };
+    final rows = <StatementRow>[];
+    final problems = <String>[];
+    final epoch = DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+    for (var i = 1; i < table.length; i++) {
+      final row = table[i];
+      String cell(String name) {
+        final index = columns[name]!;
+        return index < row.length ? FinanceMath.csvValue(row[index]) : '';
+      }
+
+      try {
+        final id = cell('ID').trim();
+        if (id.isEmpty) throw const FormatException('Нет ID');
+        final date = DateTime.tryParse(cell('Дата').trim());
+        if (date == null) throw const FormatException('Неверная дата');
+        final amount = parseSignedAmount(cell('Сумма'));
+        if (amount <= 0) throw const FormatException('Неверная сумма');
+        final kind = TransactionKind.parse(cell('Вид').trim());
+        final category = CategoryRecord(
+          id: 'csv',
+          name: cell('Категория'),
+          icon: cell('Иконка').isEmpty ? 'circle.fill' : cell('Иконка'),
+          emoji: cell('Эмодзи'),
+          colorName: cell('Цвет').isEmpty ? 'auto' : cell('Цвет'),
+          kindRawValue: kind.name,
+          createdAt: epoch,
+          updatedAt: epoch,
+        );
+        if (category.name.isEmpty) {
+          throw const FormatException('Нет категории');
+        }
+        rows.add(
+          StatementRow(
+            date: date,
+            amountMinor: amount,
+            kind: kind,
+            description: cell('Заметка'),
+            importKey: 'balance|$id',
+            id: id,
+            category: category,
+            isBalanceAdjustment: cell('Тип').trim() == 'Корректировка',
+          ),
+        );
+      } on FormatException catch (e) {
+        problems.add('Строка ${i + 1}: ${e.message}');
+      }
+    }
+    return StatementParseResult(
+      format: 'Баланс, CSV',
+      rows: rows,
+      problems: problems,
+    );
+  }
 
   /// Т-Банк CSV: «Дата операции», «Статус», «Сумма платежа» in the card
   /// currency (negative for spending), «Категория», «Описание».
@@ -560,6 +634,7 @@ class StatementImport {
     StatementRow row,
     List<CategoryRecord> choices,
   ) {
+    if (row.category != null) return row.category!;
     final bank = _norm(row.bankCategory);
     if (bank.isNotEmpty) {
       for (final choice in choices) {
@@ -584,7 +659,7 @@ class StatementImport {
   }
 
   static String transactionId(StatementRow row) =>
-      _uuid.v5(_namespace, row.importKey);
+      row.id ?? _uuid.v5(_namespace, row.importKey);
 
   /// Same kind, amount and local calendar day as an existing operation, e.g.
   /// one the user already entered by hand.
@@ -614,6 +689,7 @@ class StatementImport {
     categoryEmoji: category.emoji,
     categoryColorName: category.colorName,
     note: row.description,
+    isBalanceAdjustment: row.isBalanceAdjustment,
     kindRawValue: row.kind.name,
     updatedAt: DateTime.now().toUtc(),
   );

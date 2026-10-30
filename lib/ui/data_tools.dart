@@ -96,17 +96,30 @@ Future<List<TransactionRecord>?> runStatementImport(
     }
     var mapping = StatementImport.tbankMapping(table.first);
     var format = 'Т-Банк, CSV';
-    if (mapping == null) {
-      if (!context.mounted) return null;
-      mapping = await _sizedDialog<CsvMapping>(
-        context,
-        CsvMappingDialog(table: table),
-      );
-      if (mapping == null) return null;
-      format = 'CSV';
+    if (StatementImport.isBalanceExport(table.first)) {
+      result = StatementImport.readBalanceCsv(table);
+    } else {
+      if (mapping == null) {
+        if (!context.mounted) return null;
+        mapping = await _sizedDialog<CsvMapping>(
+          context,
+          CsvMappingDialog(table: table),
+        );
+        if (mapping == null) return null;
+        format = 'CSV';
+      }
+      result = StatementImport.readCsv(table, mapping, format: format);
     }
-    result = StatementImport.readCsv(table, mapping, format: format);
   }
+  if (!context.mounted) return null;
+  return _preview(context, store, result);
+}
+
+Future<List<TransactionRecord>?> _preview(
+  BuildContext context,
+  AppStore store,
+  StatementParseResult result,
+) async {
   if (result.rows.isEmpty) {
     throw FormatException(
       result.problems.isEmpty
@@ -490,7 +503,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                           size: 20,
                         ),
                         label: Text(item.category.name),
-                        onPressed: item.known
+                        onPressed: item.known || row.isBalanceAdjustment
                             ? null
                             : () => chooseCategory(item),
                       ),
@@ -614,3 +627,232 @@ class QuarantinePanel extends StatelessWidget {
     );
   }
 }
+
+/// Backup restore preview: what each record would do, with the same
+/// select-and-confirm flow as the statement import. Returns selected keys.
+class BackupPreviewDialog extends StatefulWidget {
+  const BackupPreviewDialog({
+    super.key,
+    required this.plan,
+    required this.fileName,
+    required this.currency,
+  });
+  final BackupPlan plan;
+  final String fileName, currency;
+  @override
+  State<BackupPreviewDialog> createState() => _BackupPreviewDialogState();
+}
+
+class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
+  late final Set<String> selected = {
+    for (final item in widget.plan.actionable) item.key,
+  };
+
+  static String actionTitle(BackupAction action) => switch (action) {
+    BackupAction.add => 'Добавится',
+    BackupAction.update => 'Обновится',
+    BackupAction.delete => 'Удалится',
+    BackupAction.skip => 'Без изменений',
+  };
+
+  int count(BackupAction action) =>
+      widget.plan.items.where((i) => i.action == action).length;
+
+  Widget tile(BackupPlanItem item) {
+    final theme = Theme.of(context);
+    final skip = item.action == BackupAction.skip;
+    final record = item.record;
+    String title;
+    var details = '';
+    Widget? leading;
+    Widget? trailing;
+    switch (record) {
+      case TransactionRecord t:
+        title = t.isBalanceAdjustment
+            ? 'Корректировка баланса'
+            : t.categoryName;
+        details =
+            '${DateFormat('d MMM y', 'ru').format(t.date.toLocal())}'
+            '${t.note.isEmpty ? '' : ' · ${t.note}'}';
+        leading = CategoryAvatar(
+          icon: t.isBalanceAdjustment ? 'tune' : t.categoryIcon,
+          emoji: t.categoryEmoji,
+          color: t.categoryColorName,
+          size: 36,
+        );
+        final income = t.kind == TransactionKind.income;
+        trailing = Text(
+          '${income ? '+' : '−'}${money(t.amountMinor, widget.currency)}',
+          style: theme.textTheme.bodyLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: income ? Colors.teal : Colors.deepOrange,
+          ),
+        );
+      case CategoryRecord c:
+        title = 'Категория «${c.name}»';
+        details = c.kind == TransactionKind.income ? 'Доход' : 'Расход';
+        leading = CategoryAvatar(
+          icon: c.icon,
+          emoji: c.emoji,
+          color: c.colorName,
+          size: 36,
+        );
+      case BudgetRecord b:
+        title = 'Бюджет «${b.categoryName}»';
+        details = DateFormat('LLLL y', 'ru').format(b.monthStart.toLocal());
+        leading = CategoryAvatar(
+          icon: b.categoryIcon,
+          emoji: b.categoryEmoji,
+          color: 'auto',
+          size: 36,
+        );
+        trailing = Text(
+          money(b.limitMinor, widget.currency),
+          style: theme.textTheme.bodyLarge,
+        );
+      default:
+        title = item.id;
+    }
+    final status = skip ? item.reason : actionTitle(item.action);
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Checkbox(
+            value: selected.contains(item.key),
+            onChanged: skip
+                ? null
+                : (v) => setState(
+                    () => v == true
+                        ? selected.add(item.key)
+                        : selected.remove(item.key),
+                  ),
+          ),
+          ?leading,
+        ],
+      ),
+      title: Text(title, maxLines: 2, overflow: TextOverflow.ellipsis),
+      subtitle: Text(
+        [status, if (details.isNotEmpty) details].join(' · '),
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: item.action == BackupAction.delete
+            ? TextStyle(color: theme.colorScheme.error)
+            : null,
+      ),
+      trailing: trailing,
+      onTap: skip
+          ? null
+          : () => setState(
+              () => selected.contains(item.key)
+                  ? selected.remove(item.key)
+                  : selected.add(item.key),
+            ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final plan = widget.plan;
+    final actionable = plan.actionable.toList();
+    final allSelected =
+        actionable.isNotEmpty &&
+        actionable.every((i) => selected.contains(i.key));
+    // Changes first, then what stays as it is.
+    final items = [
+      ...actionable,
+      ...plan.items.where((i) => i.action == BackupAction.skip),
+    ];
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        automaticallyImplyLeading: false,
+        title: const Text('Восстановление из копии'),
+      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.fileName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  [
+                    for (final action in BackupAction.values)
+                      if (count(action) > 0)
+                        '${actionTitle(action).toLowerCase()}: ${count(action)}',
+                  ].join(', '),
+                ),
+                if (plan.invalid > 0)
+                  Text(
+                    'Не удалось прочитать записей: ${plan.invalid}',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                const Text(
+                  'Отмеченные записи попадут на устройство и в синхронизацию. '
+                  'Более новые изменения на устройстве не затираются.',
+                ),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Выбрать все'),
+                  value: allSelected,
+                  onChanged: actionable.isEmpty
+                      ? null
+                      : (v) => setState(() {
+                          for (final item in actionable) {
+                            v == true
+                                ? selected.add(item.key)
+                                : selected.remove(item.key);
+                          }
+                        }),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: ListView.builder(
+              itemCount: items.length,
+              itemBuilder: (context, index) => tile(items[index]),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _Actions(
+        children: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: selected.isEmpty
+                ? null
+                : () => Navigator.pop(context, Set<String>.of(selected)),
+            child: Text('Восстановить (${selected.length})'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+Future<Set<String>?> showBackupPreview(
+  BuildContext context, {
+  required BackupPlan plan,
+  required String fileName,
+  required String currency,
+}) => _sizedDialog<Set<String>>(
+  context,
+  BackupPreviewDialog(plan: plan, fileName: fileName, currency: currency),
+);

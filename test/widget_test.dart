@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:balance_flutter/domain/finance.dart';
 import 'package:balance_flutter/services/app_store.dart';
@@ -228,7 +229,7 @@ void main() {
           final destination = File('${directory.path}/desktop.csv');
           if (destination.existsSync()) destination.deleteSync();
           Map<Object?, Object?>? selectorArguments;
-          String? sharedCsv;
+          List<int>? sharedBytes;
           final messenger =
               TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
           messenger.setMockMethodCallHandler(
@@ -251,7 +252,7 @@ void main() {
               expect(args['mimeTypes'], ['text/csv']);
               final path = (args['paths'] as List).single as String;
               expect(path.endsWith('balance-transactions.csv'), isTrue);
-              sharedCsv = await File(path).readAsString();
+              sharedBytes = await File(path).readAsBytes();
               return 'test-share-target';
             },
           );
@@ -274,8 +275,9 @@ void main() {
             await tester.pump(const Duration(milliseconds: 10));
             if (desktop
                 ? destination.existsSync() &&
-                      destination.readAsStringSync() == expected
-                : sharedCsv != null) {
+                      destination.readAsBytesSync().length ==
+                          utf8.encode(expected).length
+                : sharedBytes != null) {
               break;
             }
           }
@@ -285,9 +287,10 @@ void main() {
               selectorArguments?['suggestedName'],
               'balance-transactions.csv',
             );
-            expect(destination.readAsStringSync(), expected);
+            // Raw bytes, so the leading BOM is checked too.
+            expect(destination.readAsBytesSync(), utf8.encode(expected));
           } else {
-            expect(sharedCsv, expected);
+            expect(sharedBytes, utf8.encode(expected));
           }
           expect(expected, contains('"Текст ""в кавычках""\nНовая строка"'));
           expect(tester.takeException(), isNull);

@@ -1533,16 +1533,6 @@ class _BalanceShellState extends State<BalanceShell> {
   Future<void> restore() async {
     final file = await pickFile('Резервная копия', ['json']);
     if (file == null || !mounted) return;
-    if (!await confirmDelete(
-      context,
-      'Восстановить из копии?',
-      message:
-          'Записи из «${file.name}» будут добавлены к данным на устройстве и синхронизированы. '
-          'Более новые изменения на устройстве сохранятся.',
-      action: 'Восстановить',
-    )) {
-      return;
-    }
     await run(() async {
       final Object? decoded;
       try {
@@ -1550,7 +1540,23 @@ class _BalanceShellState extends State<BalanceShell> {
       } on FormatException {
         throw const FormatException('Файл повреждён или это не JSON');
       }
-      final result = await store.restoreBackup(decoded);
+      final plan = await store.previewBackup(decoded);
+      if (plan.items.isEmpty) {
+        throw FormatException(
+          plan.invalid > 0
+              ? 'В копии нет читаемых записей'
+              : 'Восстанавливать нечего: копия пуста или содержит только удаления',
+        );
+      }
+      if (!mounted) return;
+      final keys = await showBackupPreview(
+        context,
+        plan: plan,
+        fileName: file.name,
+        currency: store.currency,
+      );
+      if (keys == null) return;
+      final result = await store.restoreBackup(decoded, only: keys);
       if (mounted) {
         ScaffoldMessenger.of(
           context,

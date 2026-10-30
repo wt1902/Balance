@@ -218,23 +218,45 @@ void main() {
     expect(BuiltInCategories.income.length, 5);
   });
 
-  test(
-    'CSV quotes commas, double quotes, newlines and includes adjustments',
-    () {
-      final csv = FinanceMath.exportCsv([
-        record('a', 123, note: 'кофе, "чай"\nеда'),
-        record(
-          'b',
-          400,
-          date: january.add(const Duration(days: 1)),
-          adjustment: true,
-        ),
-      ]);
-      expect(csv, startsWith('Дата,Тип,Категория,Сумма,Заметка\n'));
-      expect(csv, contains('"кофе, ""чай""\nеда"'));
-      expect(csv, contains('"1.23"'));
-      expect(csv.indexOf('Корректировка'), lessThan(csv.indexOf('кофе')));
-      expect(FinanceMath.escapeCsv('a\rb'), '"a\rb"');
-    },
-  );
+  test('CSV quotes commas, double quotes, newlines and includes adjustments', () {
+    final csv = FinanceMath.exportCsv([
+      record('a', 123, note: 'кофе, "чай"\nеда'),
+      record(
+        'b',
+        400,
+        date: january.add(const Duration(days: 1)),
+        adjustment: true,
+      ),
+    ]);
+    expect(
+      csv,
+      startsWith(
+        '\uFEFFДата,Тип,Категория,Сумма,Заметка,ID,Вид,Иконка,Эмодзи,Цвет,Изменено\n',
+      ),
+    );
+    expect(csv, contains('"кофе, ""чай""\nеда"'));
+    expect(csv, contains('"1.23"'));
+    expect(csv.indexOf('Корректировка'), lessThan(csv.indexOf('кофе')));
+    expect(FinanceMath.escapeCsv('a\rb'), '"a\rb"');
+  });
+
+  test('CSV disarms formulas reversibly', () {
+    for (final value in [
+      '=SUM(A1)',
+      '+7',
+      '-5',
+      '@x',
+      '\tx',
+      "'quoted",
+      "'=x",
+    ]) {
+      final cell = FinanceMath.csvCell(value);
+      expect(cell, startsWith("'"), reason: value);
+      expect(FinanceMath.csvValue(cell), value, reason: value);
+    }
+    for (final value in ['кофе', '12.50', '', "it's"]) {
+      expect(FinanceMath.csvCell(value), value);
+      expect(FinanceMath.csvValue(value), value);
+    }
+  });
 }

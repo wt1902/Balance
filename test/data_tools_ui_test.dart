@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:balance_flutter/domain/appearance.dart';
 import 'package:balance_flutter/domain/backup.dart';
 import 'package:balance_flutter/domain/finance.dart';
@@ -261,6 +263,244 @@ void main() {
         );
         expect(list.any((t) => t.amountMinor == 500000), isTrue);
         expect(list.any((t) => t.amountMinor == 45000), isFalse);
+        store.dispose();
+      });
+    });
+
+    group('BackupPreviewDialog ${entry.key}', () {
+      testWidgets('plan, selection, pop and restore', (tester) async {
+        final store = AppStore(storage: MemorySnapshotStorage());
+        await store.initialize();
+        TransactionRecord tx(String id, DateTime updated) => TransactionRecord(
+          id: id,
+          amountMinor: 12300,
+          date: DateTime.utc(2026, 2, 3, 10),
+          categoryName: 'Другое',
+          updatedAt: updated,
+        );
+        await store.saveTransaction(tx('keep', DateTime.utc(2026, 3, 1)));
+        final stored = store.transactions.firstWhere((t) => t.id == 'keep');
+        final old = TransactionRecord(
+          id: 'keep',
+          amountMinor: 999,
+          date: stored.date,
+          categoryName: 'Другое',
+          updatedAt: DateTime.utc(2000, 1, 1),
+        );
+        final json =
+            jsonDecode(
+                  jsonEncode({
+                    'format': 'balance-backup',
+                    'version': 1,
+                    'data': {
+                      'transactions': [
+                        tx('n1', DateTime.utc(2026, 4, 1)).toJson(),
+                        tx('n2', DateTime.utc(2026, 4, 2)).toJson(),
+                        old.toJson(),
+                      ],
+                      'categories': [
+                        CategoryRecord(
+                          id: 'cat-new',
+                          name: 'Новая из копии',
+                          icon: 'star.fill',
+                          colorName: 'auto',
+                          createdAt: DateTime.utc(2026, 4, 1),
+                          updatedAt: DateTime.utc(2026, 4, 1),
+                        ).toJson(),
+                      ],
+                      'budgets': [
+                        BudgetRecord(
+                          id: 'bud-new',
+                          categoryName: 'Другое',
+                          limitMinor: 500000,
+                          monthStart: DateTime.utc(2026, 4, 1),
+                          updatedAt: DateTime.utc(2026, 4, 1),
+                        ).toJson(),
+                      ],
+                    },
+                  }),
+                )
+                as Object;
+        final plan = await store.previewBackup(json);
+
+        final host = Host();
+        await pumpHost(
+          tester,
+          entry.value,
+          (c) => host.build(
+            c,
+            BackupPreviewDialog(
+              plan: plan,
+              fileName: 'copy-2026.json',
+              currency: store.currency,
+            ),
+          ),
+        );
+        await open(tester);
+
+        expect(find.text('Восстановление из копии'), findsOneWidget);
+        expect(find.text('copy-2026.json'), findsOneWidget);
+        expect(find.textContaining('добавится: 4'), findsOneWidget);
+        expect(find.textContaining('без изменений: 1'), findsOneWidget);
+        expect(find.text('Восстановить (4)'), findsOneWidget);
+
+        final skipTile = find.ancestor(
+          of: find.textContaining('На устройстве та же или более новая версия'),
+          matching: find.byType(ListTile),
+        );
+        await reveal(tester, skipTile);
+        expect(skipTile, findsOneWidget);
+        final skipBox = tester.widget<Checkbox>(
+          find.descendant(of: skipTile, matching: find.byType(Checkbox)),
+        );
+        expect(skipBox.onChanged, isNull);
+
+        final addTiles = find.byWidgetPredicate(
+          (w) =>
+              w is ListTile &&
+              w.subtitle is Text &&
+              ((w.subtitle as Text).data ?? '').startsWith('Добавится'),
+        );
+        expect(addTiles, findsWidgets);
+        await reveal(tester, addTiles.first);
+        await tester.tap(addTiles.first);
+        await tester.pumpAndSettle();
+        expect(find.text('Восстановить (3)'), findsOneWidget);
+
+        Future<bool?> allValue() async {
+          final all = find.widgetWithText(CheckboxListTile, 'Выбрать все');
+          await reveal(tester, all);
+          return tester.widget<CheckboxListTile>(all).value;
+        }
+
+        expect(await allValue(), isFalse);
+        await tester.tap(find.text('Выбрать все'));
+        await tester.pumpAndSettle();
+        expect(find.text('Восстановить (4)'), findsOneWidget);
+        expect(await allValue(), isTrue);
+        await tester.tap(find.text('Выбрать все'));
+        await tester.pumpAndSettle();
+        expect(
+          tester
+              .widget<FilledButton>(
+                find.widgetWithText(FilledButton, 'Восстановить (0)'),
+              )
+              .onPressed,
+          isNull,
+        );
+        await tester.tap(find.text('Выбрать все'));
+        await tester.pumpAndSettle();
+
+        await reveal(tester, addTiles.first);
+        await tester.tap(addTiles.first);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Восстановить (3)'));
+        await tester.pumpAndSettle();
+        expect(host.popped, isTrue);
+        final keys = (host.result as Set).cast<String>();
+        expect(keys.length, 3);
+        expect(keys.every((k) => plan.actionable.any((i) => i.key == k)), true);
+        expect(keys.contains('transaction:keep'), isFalse);
+
+        await store.restoreBackup(json, only: keys);
+        final all = {
+          ...store.transactions.map((t) => 'transaction:${t.id}'),
+          ...store.categories.map((c) => 'category:${c.id}'),
+          ...store.budgets.map((b) => 'budget:${b.id}'),
+        };
+        final wanted = plan.actionable.map((i) => i.key).toSet();
+        for (final item in plan.actionable) {
+          expect(
+            all.contains(item.key),
+            keys.contains(item.key),
+            reason: item.key,
+          );
+        }
+        expect(wanted.length, 4);
+        expect(
+          store.transactions.firstWhere((t) => t.id == 'keep').amountMinor,
+          12300,
+        );
+        store.dispose();
+      });
+    });
+
+    group('Balance CSV preview ${entry.key}', () {
+      testWidgets('adjustment locked, ids and flags preserved', (tester) async {
+        final store = AppStore(storage: MemorySnapshotStorage());
+        await store.initialize();
+        final csv = FinanceMath.exportCsv([
+          TransactionRecord(
+            id: 'csv-1',
+            amountMinor: 15050,
+            date: DateTime.utc(2026, 2, 5, 12),
+            categoryName: 'Кафе',
+            categoryIcon: 'cup.and.saucer.fill',
+            categoryEmoji: '☕',
+            categoryColorName: 'orange',
+            note: 'Латте',
+            updatedAt: DateTime.utc(2026, 2, 5),
+          ),
+          TransactionRecord(
+            id: 'csv-adj',
+            amountMinor: 7000,
+            date: DateTime.utc(2026, 2, 4, 12),
+            categoryName: 'Корректировка баланса',
+            note: 'Сверка',
+            isBalanceAdjustment: true,
+            updatedAt: DateTime.utc(2026, 2, 4),
+          ),
+        ]);
+        final result = StatementImport.readBalanceCsv(
+          StatementImport.parseCsv(csv),
+        );
+        expect(result.rows.length, 2);
+
+        final host = Host();
+        await pumpHost(
+          tester,
+          entry.value,
+          (c) => host.build(
+            c,
+            StatementPreviewDialog(store: store, result: result),
+          ),
+        );
+        await open(tester);
+
+        expect(find.textContaining('Баланс, CSV'), findsOneWidget);
+        expect(find.text('Импортировать (2)'), findsOneWidget);
+
+        final normal = find.descendant(
+          of: find.widgetWithText(ListTile, 'Латте'),
+          matching: find.byType(ActionChip),
+        );
+        final adj = find.descendant(
+          of: find.widgetWithText(ListTile, 'Сверка'),
+          matching: find.byType(ActionChip),
+        );
+        await reveal(tester, adj);
+        expect(tester.widget<ActionChip>(adj).onPressed, isNull);
+        await reveal(tester, normal);
+        expect(tester.widget<ActionChip>(normal).onPressed, isNotNull);
+        await tester.tap(normal);
+        await tester.pumpAndSettle();
+        expect(find.byType(BottomSheet), findsOneWidget);
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+        expect(find.byType(BottomSheet), findsNothing);
+
+        await tester.tap(find.text('Импортировать (2)'));
+        await tester.pumpAndSettle();
+        expect(host.popped, isTrue);
+        final list = (host.result as List).cast<TransactionRecord>();
+        final n = list.firstWhere((t) => t.id == 'csv-1');
+        final a = list.firstWhere((t) => t.id == 'csv-adj');
+        expect(n.isBalanceAdjustment, isFalse);
+        expect(a.isBalanceAdjustment, isTrue);
+        expect(n.categoryEmoji, '☕');
+        expect(n.categoryColorName, 'orange');
+        expect(n.amountMinor, 15050);
+        expect(a.amountMinor, 7000);
         store.dispose();
       });
     });

@@ -25,6 +25,42 @@ class BackupRestoreResult {
   }
 }
 
+enum BackupAction { add, update, delete, skip }
+
+/// What restoring one backup record would do, for the preview.
+class BackupPlanItem {
+  const BackupPlanItem({
+    required this.entity,
+    required this.id,
+    required this.action,
+    this.record,
+    this.reason = '',
+  });
+
+  final String entity, id;
+  final BackupAction action;
+
+  /// The backup's record, or the device record a deletion would remove.
+  final Object? record;
+
+  /// Why a record is skipped.
+  final String reason;
+
+  String get key => '$entity:$id';
+}
+
+class BackupPlan {
+  const BackupPlan(this.items, {this.invalid = 0, this.unchanged = 0});
+  final List<BackupPlanItem> items;
+
+  /// [invalid]: unreadable records. [unchanged]: deletions of records this
+  /// device never had, which are not listed in [items].
+  final int invalid, unchanged;
+
+  Iterable<BackupPlanItem> get actionable =>
+      items.where((item) => item.action != BackupAction.skip);
+}
+
 /// Validates the envelope and returns its data section. Individual records are
 /// validated while merging, so one damaged record does not reject the file.
 Map<String, dynamic> backupData(Object? decoded) {

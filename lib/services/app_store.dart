@@ -614,173 +614,273 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     },
   );
 
+  /// Dry run of [restoreBackup]: what each record would do, without changes.
+  Future<BackupPlan> previewBackup(Object? decoded) => _exclusive(() async {
+    final data = backupData(decoded);
+    final transactions = Map.of(_transactions);
+    final categories = Map.of(_categories);
+    final budgets = Map.of(_budgets);
+    final dirty = Map.of(_dirty);
+    final tombstones = Map.of(_tombstones);
+    final plan = <BackupPlanItem>[];
+    final BackupRestoreResult result;
+    try {
+      result = _restoreRecords(data, plan: plan);
+    } finally {
+      _transactions
+        ..clear()
+        ..addAll(transactions);
+      _categories
+        ..clear()
+        ..addAll(categories);
+      _budgets
+        ..clear()
+        ..addAll(budgets);
+      _dirty
+        ..clear()
+        ..addAll(dirty);
+      _tombstones
+        ..clear()
+        ..addAll(tombstones);
+    }
+    return BackupPlan(
+      plan,
+      invalid: result.invalid,
+      unchanged:
+          result.skipped -
+          plan.where((i) => i.action == BackupAction.skip).length,
+    );
+  });
+
   /// Merges a backup by last-write-wins on updatedAt, keeping the backup's
   /// timestamps: newer device records and later deletions win, and the server
-  /// resolves the queued changes with the same rule on the next sync.
-  Future<BackupRestoreResult> restoreBackup(Object? decoded) =>
-      _exclusive(() async {
-        final data = backupData(decoded);
-        final result = BackupRestoreResult();
-        List<Map<String, dynamic>> items(String section) {
-          final value = data[section];
-          if (value is! List) {
-            if (value != null) result.invalid++;
-            return const [];
-          }
-          return [
-            for (final item in value)
-              if (item is Map)
-                Map<String, dynamic>.from(item)
-              else
-                <String, dynamic>{},
-          ];
-        }
+  /// resolves the queued changes with the same rule on the next sync. With
+  /// [only], records whose `entity:id` key is not listed are left out.
+  Future<BackupRestoreResult> restoreBackup(
+    Object? decoded, {
+    Set<String>? only,
+  }) => _exclusive(() async {
+    final result = _restoreRecords(backupData(decoded), only: only);
+    if (result.changed > 0) await _edited();
+    return result;
+  });
 
-        bool newer(String key, DateTime? local, DateTime incoming) {
-          final tombstone = _tombstones[key];
-          if (tombstone != null &&
-              !incoming.isAfter(
-                DateTime.parse(tombstone['updatedAt'] as String),
-              )) {
-            return false;
-          }
-          return local == null || incoming.isAfter(local);
-        }
+  BackupRestoreResult _restoreRecords(
+    Map<String, dynamic> data, {
+    List<BackupPlanItem>? plan,
+    Set<String>? only,
+  }) {
+    final result = BackupRestoreResult();
+    List<Map<String, dynamic>> items(String section) {
+      final value = data[section];
+      if (value is! List) {
+        if (value != null) result.invalid++;
+        return const [];
+      }
+      return [
+        for (final item in value)
+          if (item is Map)
+            Map<String, dynamic>.from(item)
+          else
+            <String, dynamic>{},
+      ];
+    }
 
-        void restore<T>(
-          String section,
-          String entity,
-          T Function(Map<String, dynamic>) parse,
-          String Function(T) id,
-          DateTime Function(T) updatedAt,
-          bool Function(T) duplicate,
-          Map<String, T> target,
-          Map<String, dynamic> Function(T) payload,
-        ) {
-          for (final json in items(section)) {
-            final T record;
-            try {
-              record = parse(json);
-            } catch (_) {
-              result.invalid++;
-              continue;
-            }
-            final key = '$entity:${id(record)}';
-            final local = target[id(record)];
-            if (!newer(
-                  key,
-                  local == null ? null : updatedAt(local),
-                  updatedAt(record),
-                ) ||
-                duplicate(record)) {
-              result.skipped++;
-              continue;
-            }
-            target[id(record)] = record;
-            _queueChange(
-              _change(entity, id(record), updatedAt(record), payload(record)),
+    String? older(String key, DateTime? local, DateTime incoming) {
+      final tombstone = _tombstones[key];
+      if (tombstone != null &&
+          !incoming.isAfter(DateTime.parse(tombstone['updatedAt'] as String))) {
+        return 'Удалено на устройстве позже';
+      }
+      return local == null || incoming.isAfter(local)
+          ? null
+          : 'На устройстве та же или более новая версия';
+    }
+
+    void restore<T extends Object>(
+      String section,
+      String entity,
+      T Function(Map<String, dynamic>) parse,
+      String Function(T) id,
+      DateTime Function(T) updatedAt,
+      String? Function(T) duplicate,
+      Map<String, T> target,
+      Map<String, dynamic> Function(T) payload,
+    ) {
+      for (final json in items(section)) {
+        final T record;
+        try {
+          record = parse(json);
+        } catch (_) {
+          result.invalid++;
+          continue;
+        }
+        final key = '$entity:${id(record)}';
+        final local = target[id(record)];
+        final reason =
+            older(
+              key,
+              local == null ? null : updatedAt(local),
+              updatedAt(record),
+            ) ??
+            duplicate(record);
+        if (reason != null || (only != null && !only.contains(key))) {
+          result.skipped++;
+          if (reason != null) {
+            plan?.add(
+              BackupPlanItem(
+                entity: entity,
+                id: id(record),
+                action: BackupAction.skip,
+                record: record,
+                reason: reason,
+              ),
             );
-            local == null ? result.added++ : result.updated++;
           }
+          continue;
         }
+        target[id(record)] = record;
+        _queueChange(
+          _change(entity, id(record), updatedAt(record), payload(record)),
+        );
+        local == null ? result.added++ : result.updated++;
+        plan?.add(
+          BackupPlanItem(
+            entity: entity,
+            id: id(record),
+            action: local == null ? BackupAction.add : BackupAction.update,
+            record: record,
+          ),
+        );
+      }
+    }
 
-        restore<CategoryRecord>(
-          'categories',
-          'category',
-          (json) {
-            final record = CategoryRecord.fromJson(json);
-            if (record.name.trim().isEmpty) {
-              throw const FormatException('Пустое название');
-            }
-            return record;
-          },
-          (r) => r.id,
-          (r) => r.updatedAt,
-          (r) => _categories.values.any(
+    restore<CategoryRecord>(
+      'categories',
+      'category',
+      (json) {
+        final record = CategoryRecord.fromJson(json);
+        if (record.name.trim().isEmpty) {
+          throw const FormatException('Пустое название');
+        }
+        return record;
+      },
+      (r) => r.id,
+      (r) => r.updatedAt,
+      (r) =>
+          _categories.values.any(
             (c) =>
                 c.id != r.id &&
                 c.name == r.name &&
                 c.kindRawValue == r.kindRawValue,
-          ),
-          _categories,
-          (r) => r.payload(),
-        );
-        restore<BudgetRecord>(
-          'budgets',
-          'budget',
-          (json) {
-            final record = BudgetRecord.fromJson(json);
-            if (record.limitMinor <= 0) {
-              throw const FormatException('Лимит должен быть больше нуля');
-            }
-            return record;
-          },
-          (r) => r.id,
-          (r) => r.updatedAt,
-          (r) {
-            final month = r.monthStart.toLocal();
-            return _budgets.values.any(
+          )
+          ? 'Категория с таким названием уже есть'
+          : null,
+      _categories,
+      (r) => r.payload(),
+    );
+    restore<BudgetRecord>(
+      'budgets',
+      'budget',
+      (json) {
+        final record = BudgetRecord.fromJson(json);
+        if (record.limitMinor <= 0) {
+          throw const FormatException('Лимит должен быть больше нуля');
+        }
+        return record;
+      },
+      (r) => r.id,
+      (r) => r.updatedAt,
+      (r) {
+        final month = r.monthStart.toLocal();
+        return _budgets.values.any(
               (b) =>
                   b.id != r.id &&
                   b.categoryName == r.categoryName &&
                   b.monthStart.toLocal().year == month.year &&
                   b.monthStart.toLocal().month == month.month,
-            );
-          },
-          _budgets,
-          (r) => r.payload(),
-        );
-        restore<TransactionRecord>(
-          'transactions',
-          'transaction',
-          (json) {
-            final record = TransactionRecord.fromJson(json);
-            if (record.amountMinor <= 0) {
-              throw const FormatException('Сумма должна быть больше нуля');
-            }
-            return record;
-          },
-          (r) => r.id,
-          (r) => r.updatedAt,
-          (_) => false,
-          _transactions,
-          (r) => r.payload(),
-        );
-        for (final json in items('tombstones')) {
-          try {
-            final change = _validChange(json);
-            if (change['deleted'] != true) {
-              throw const FormatException('Not a deletion');
-            }
-            final entity = change['entity'] as String;
-            final id = change['id'] as String;
-            final at = DateTime.parse(change['updatedAt'] as String);
-            final target = switch (entity) {
-              'transaction' => _transactions,
-              'category' => _categories,
-              _ => _budgets,
-            };
-            final local = target[id];
-            final localAt = switch (local) {
-              TransactionRecord r => r.updatedAt,
-              CategoryRecord r => r.updatedAt,
-              BudgetRecord r => r.updatedAt,
-              _ => null,
-            };
-            if (localAt == null || !at.isAfter(localAt)) {
-              result.skipped++;
-              continue;
-            }
-            target.remove(id);
-            _queueChange(_change(entity, id, at, null));
-            result.deleted++;
-          } catch (_) {
-            result.invalid++;
-          }
+            )
+            ? 'Бюджет на этот месяц уже есть'
+            : null;
+      },
+      _budgets,
+      (r) => r.payload(),
+    );
+    restore<TransactionRecord>(
+      'transactions',
+      'transaction',
+      (json) {
+        final record = TransactionRecord.fromJson(json);
+        if (record.amountMinor <= 0) {
+          throw const FormatException('Сумма должна быть больше нуля');
         }
-        if (result.changed > 0) await _edited();
-        return result;
-      });
+        return record;
+      },
+      (r) => r.id,
+      (r) => r.updatedAt,
+      (_) => null,
+      _transactions,
+      (r) => r.payload(),
+    );
+    for (final json in items('tombstones')) {
+      try {
+        final change = _validChange(json);
+        if (change['deleted'] != true) {
+          throw const FormatException('Not a deletion');
+        }
+        final entity = change['entity'] as String;
+        final id = change['id'] as String;
+        final at = DateTime.parse(change['updatedAt'] as String);
+        final target = switch (entity) {
+          'transaction' => _transactions,
+          'category' => _categories,
+          _ => _budgets,
+        };
+        final local = target[id];
+        final localAt = switch (local) {
+          TransactionRecord r => r.updatedAt,
+          CategoryRecord r => r.updatedAt,
+          BudgetRecord r => r.updatedAt,
+          _ => null,
+        };
+        // A deletion of a record this device never had changes nothing.
+        if (localAt == null) {
+          result.skipped++;
+          continue;
+        }
+        final key = '$entity:$id';
+        if (!at.isAfter(localAt) || (only != null && !only.contains(key))) {
+          result.skipped++;
+          if (!at.isAfter(localAt)) {
+            plan?.add(
+              BackupPlanItem(
+                entity: entity,
+                id: id,
+                action: BackupAction.skip,
+                record: local,
+                reason: 'Изменено на устройстве после удаления',
+              ),
+            );
+          }
+          continue;
+        }
+        target.remove(id);
+        _queueChange(_change(entity, id, at, null));
+        result.deleted++;
+        plan?.add(
+          BackupPlanItem(
+            entity: entity,
+            id: id,
+            action: BackupAction.delete,
+            record: local,
+          ),
+        );
+      } catch (_) {
+        result.invalid++;
+      }
+    }
+    return result;
+  }
 
   /// Adds new transactions in one snapshot write. Already known ids, including
   /// deleted ones, are skipped so a re-imported statement adds nothing twice.

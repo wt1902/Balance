@@ -418,20 +418,39 @@ class FinanceMath {
   }
 
   static String escapeCsv(String value) => '"${value.replaceAll('"', '""')}"';
+
+  /// The first five columns match the native clients' export; the rest make a
+  /// transaction lossless, so StatementImport can read the file back exactly.
+  static const csvHeader = [
+    'Дата',
+    'Тип',
+    'Категория',
+    'Сумма',
+    'Заметка',
+    'ID',
+    'Вид',
+    'Иконка',
+    'Эмодзи',
+    'Цвет',
+    'Изменено',
+  ];
+
+  /// Spreadsheets run cells starting with `= + - @`, tab or CR as formulas.
+  /// A leading apostrophe disarms them; it is also added before an existing
+  /// apostrophe, so [csvValue] can remove exactly one and restore the text.
+  static String csvCell(String value) =>
+      RegExp(r"^[=+\-@\t\r']").hasMatch(value) ? "'$value" : value;
+  static String csvValue(String cell) =>
+      RegExp(r"^'[=+\-@\t\r']").hasMatch(cell) ? cell.substring(1) : cell;
+
+  /// UTF-8 with BOM (spreadsheets otherwise misread Cyrillic), LF rows,
+  /// ISO 8601 UTC dates, amounts in units with exactly two decimals.
   static String exportCsv(Iterable<TransactionRecord> items) {
     final ordered = items.toList()..sort((a, b) => b.date.compareTo(a.date));
-    return [
-      'Дата,Тип,Категория,Сумма,Заметка',
-      ...ordered.map(
-        (item) => [
-          _timestamp(item.date),
-          item.isBalanceAdjustment ? 'Корректировка' : item.kind.title,
-          item.categoryName,
-          formatMinor(item.amountMinor),
-          item.note,
-        ].map(escapeCsv).join(','),
-      ),
-    ].join('\n');
+    return '\uFEFF${[
+      csvHeader.join(','),
+      ...ordered.map((item) => [_timestamp(item.date), item.isBalanceAdjustment ? 'Корректировка' : item.kind.title, item.categoryName, formatMinor(item.amountMinor), item.note, item.id, item.kindRawValue, item.categoryIcon, item.categoryEmoji, item.categoryColorName, _timestamp(item.updatedAt)].map((value) => escapeCsv(csvCell(value))).join(',')),
+    ].join('\n')}';
   }
 }
 
