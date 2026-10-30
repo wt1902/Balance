@@ -49,6 +49,32 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
   DateTime? blockedUntil;
   DateTime? _backgroundedAt;
 
+  static AppLock? _current;
+  int _external = 0;
+  DateTime? _externalEndedAt;
+
+  /// Runs system UI the app opened itself (file picker, share sheet,
+  /// permission or biometric prompt). It briefly sends the app to the
+  /// background, which must not count as leaving the app and relock it.
+  static Future<T> whileExternal<T>(Future<T> Function() body) async {
+    final lock = _current;
+    if (lock == null) return body();
+    lock._external++;
+    try {
+      return await body();
+    } finally {
+      lock._external--;
+      lock._externalEndedAt = lock._clock();
+    }
+  }
+
+  /// The resume that follows system UI can arrive just after it returned.
+  bool get _inExternalUi {
+    final ended = _externalEndedAt;
+    return _external > 0 ||
+        (ended != null && _clock().difference(ended).inSeconds < 3);
+  }
+
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
     enabled = _prefs!.getBool('privacy.appLock') ?? false;
@@ -59,6 +85,7 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
     final until = _prefs!.getString('privacy.blockedUntil');
     blockedUntil = until == null ? null : DateTime.tryParse(until);
     locked = enabled;
+    _current = this;
     biometricsAvailable = await _canUseBiometrics();
     // MainActivity applies the saved value itself on create; this only
     // covers an engine attached to an already running activity.
@@ -191,11 +218,13 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<bool> _authenticate() async {
     try {
-      return await _auth.authenticate(
-        localizedReason: 'Разблокируйте «Баланс»',
-        // Windows Hello cannot be limited to biometrics.
-        biometricOnly: defaultTargetPlatform != TargetPlatform.windows,
-        persistAcrossBackgrounding: true,
+      return await whileExternal(
+        () => _auth.authenticate(
+          localizedReason: 'Разблокируйте «Баланс»',
+          // Windows Hello cannot be limited to biometrics.
+          biometricOnly: defaultTargetPlatform != TargetPlatform.windows,
+          persistAcrossBackgrounding: true,
+        ),
       );
     } catch (_) {
       return false;
@@ -270,6 +299,7 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
         final since = _backgroundedAt;
         _backgroundedAt = null;
         if (enabled &&
+            !_inExternalUi &&
             since != null &&
             _clock().difference(since).inSeconds >= lockAfter) {
           locked = true;
@@ -290,6 +320,7 @@ class AppLock extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    if (identical(_current, this)) _current = null;
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

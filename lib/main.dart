@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'
     show LicenseRegistry, LicenseEntryWithLineBreaks;
@@ -5,6 +7,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'services/app_lock.dart';
 import 'services/app_store.dart';
 import 'services/background.dart';
+import 'services/notifications.dart';
 import 'ui/app.dart';
 
 Future<void> main() async {
@@ -16,17 +19,30 @@ Future<void> main() async {
   });
   final store = AppStore();
   final lock = AppLock();
+  final notifications = Notifications();
   try {
     // The lock is known before the first frame, so nothing shows unlocked.
     await lock.initialize();
     await store.initialize();
+    await notifications.initialize();
+    // One check per burst of changes: budget alerts and the reminder time.
+    Timer? pending;
+    void check() => notifications.ledgerChanged(
+      budgets: store.budgets,
+      transactions: store.transactions,
+    );
+    store.addListener(() {
+      pending?.cancel();
+      pending = Timer(const Duration(seconds: 1), check);
+    });
+    check();
     try {
       await configureBackgroundSync();
     } catch (_) {
       store.error =
           'Не удалось включить фоновую синхронизацию. Синхронизация при открытии приложения доступна.';
     }
-    runApp(BalanceApp(store: store, lock: lock));
+    runApp(BalanceApp(store: store, lock: lock, notifications: notifications));
   } catch (error) {
     runApp(
       MaterialApp(

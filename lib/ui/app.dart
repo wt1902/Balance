@@ -12,13 +12,21 @@ import 'data_tools.dart';
 import '../services/app_lock.dart';
 import '../services/app_store.dart';
 import '../services/launch_actions.dart';
+import '../services/notifications.dart';
 import 'design.dart';
 import 'editors.dart';
+import 'notifications_panel.dart';
 import 'privacy.dart';
 
 class BalanceApp extends StatelessWidget {
-  const BalanceApp({super.key, required this.store, this.lock});
+  const BalanceApp({
+    super.key,
+    required this.store,
+    this.lock,
+    this.notifications,
+  });
   final AppStore store;
+  final Notifications? notifications;
 
   /// App lock and privacy cover; absent in tests that do not need it.
   final AppLock? lock;
@@ -47,16 +55,22 @@ class BalanceApp extends StatelessWidget {
       builder: (context, child) =>
           PrivacyGate(lock: lock, child: child ?? const SizedBox.shrink()),
       home: store.ready
-          ? BalanceShell(store: store, lock: lock)
+          ? BalanceShell(store: store, lock: lock, notifications: notifications)
           : const Scaffold(body: Center(child: CircularProgressIndicator())),
     ),
   );
 }
 
 class BalanceShell extends StatefulWidget {
-  const BalanceShell({super.key, required this.store, this.lock});
+  const BalanceShell({
+    super.key,
+    required this.store,
+    this.lock,
+    this.notifications,
+  });
   final AppStore store;
   final AppLock? lock;
+  final Notifications? notifications;
   @override
   State<BalanceShell> createState() => _BalanceShellState();
 }
@@ -107,9 +121,12 @@ class _BalanceShellState extends State<BalanceShell> {
   void initState() {
     super.initState();
     LaunchActions.listen(quickAdd);
+    widget.notifications?.onTap = openNotification;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final action = await LaunchActions.initialAction();
       if (action != null && mounted) await quickAdd(action);
+      final payload = await widget.notifications?.launchPayload();
+      if (payload != null && mounted) await openNotification(payload);
     });
     _setupShortcuts();
   }
@@ -132,6 +149,21 @@ class _BalanceShellState extends State<BalanceShell> {
       ]);
     } catch (_) {
       // Shortcuts are optional; the plugin is absent in tests.
+    }
+  }
+
+  /// A tapped notification: the reminder opens a new expense, a budget alert
+  /// the budgets page.
+  Future<void> openNotification(String payload) async {
+    if (!mounted) return;
+    if (payload == 'reminder') {
+      await quickAdd('expense');
+    } else if (payload == 'budget') {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      setState(() {
+        page = 3;
+        budgetMonth = DateTime(DateTime.now().year, DateTime.now().month);
+      });
     }
   }
 
@@ -1431,6 +1463,22 @@ class _BalanceShellState extends State<BalanceShell> {
         ],
       ),
     ),
+    if (widget.notifications != null) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Уведомления'),
+            NotificationsPanel(
+              notifications: widget.notifications!,
+              store: store,
+              run: run,
+            ),
+          ],
+        ),
+      ),
+    ],
     if (widget.lock != null) ...[
       const SizedBox(height: 20),
       Panel(

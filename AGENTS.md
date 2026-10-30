@@ -54,6 +54,8 @@ BalanceFlutter/
 │   │   ├── runtime_lock*.dart # межпроцессная/межвкладочная блокировка
 │   │   ├── background.dart  # фоновая синхронизация (WorkManager, Android)
 │   │   ├── launch_actions.dart # канал balance/launch: плитка, виджет Android
+│   │   ├── notifications.dart # уведомления: бюджет 80/100%, напоминание
+│   │   ├── app_lock.dart    # блокировка PIN-кодом и биометрией
 │   │   └── widget_summary.dart # строки для виджета главного экрана
 │   └── ui/
 │       ├── app.dart         # BalanceApp, BalanceShell, экраны

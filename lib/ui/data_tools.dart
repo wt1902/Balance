@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 import '../domain/backup.dart';
 import '../domain/finance.dart';
 import '../domain/statement_import.dart';
+import '../services/app_lock.dart';
 import '../services/app_store.dart';
 import 'design.dart';
 
@@ -20,29 +21,31 @@ Future<void> saveFile(
   required String extension,
 }) async {
   final file = XFile.fromData(bytes, mimeType: mimeType, name: name);
-  if (kIsWeb) {
-    await file.saveTo(name);
-  } else if (defaultTargetPlatform == TargetPlatform.android ||
-      defaultTargetPlatform == TargetPlatform.iOS) {
-    final box = context.findRenderObject() as RenderBox?;
-    await SharePlus.instance.share(
-      ShareParams(
-        files: [file],
-        fileNameOverrides: [name],
-        sharePositionOrigin: box == null
-            ? null
-            : box.localToGlobal(Offset.zero) & box.size,
-      ),
-    );
-  } else {
-    final location = await getSaveLocation(
-      suggestedName: name,
-      acceptedTypeGroups: [
-        XTypeGroup(label: label, extensions: [extension]),
-      ],
-    );
-    if (location != null) await file.saveTo(location.path);
-  }
+  await AppLock.whileExternal(() async {
+    if (kIsWeb) {
+      await file.saveTo(name);
+    } else if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      final box = context.findRenderObject() as RenderBox?;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [file],
+          fileNameOverrides: [name],
+          sharePositionOrigin: box == null
+              ? null
+              : box.localToGlobal(Offset.zero) & box.size,
+        ),
+      );
+    } else {
+      final location = await getSaveLocation(
+        suggestedName: name,
+        acceptedTypeGroups: [
+          XTypeGroup(label: label, extensions: [extension]),
+        ],
+      );
+      if (location != null) await file.saveTo(location.path);
+    }
+  });
 }
 
 /// [androidMimeTypes] covers extensions Android cannot map to a MIME type:
@@ -51,18 +54,20 @@ Future<XFile?> pickFile(
   String label,
   List<String> extensions, {
   List<String> androidMimeTypes = const [],
-}) => openFile(
-  acceptedTypeGroups: [
-    XTypeGroup(
-      label: label,
-      extensions: extensions,
-      mimeTypes: !kIsWeb && defaultTargetPlatform == TargetPlatform.android
-          ? androidMimeTypes
-          : null,
-      // iOS needs UTIs; public.data keeps any statement selectable.
-      uniformTypeIdentifiers: const ['public.data'],
-    ),
-  ],
+}) => AppLock.whileExternal(
+  () => openFile(
+    acceptedTypeGroups: [
+      XTypeGroup(
+        label: label,
+        extensions: extensions,
+        mimeTypes: !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+            ? androidMimeTypes
+            : null,
+        // iOS needs UTIs; public.data keeps any statement selectable.
+        uniformTypeIdentifiers: const ['public.data'],
+      ),
+    ],
+  ),
 );
 
 Future<T?> _sizedDialog<T>(BuildContext context, Widget child) => showDialog<T>(

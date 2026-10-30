@@ -176,6 +176,31 @@ void main() {
       lock.dispose();
     });
 
+    test('system UI opened by the app does not relock it', () async {
+      final lock = await open();
+      await lock.enable('2468');
+      // A file picker: paused and resumed while it is open.
+      await AppLock.whileExternal(() async {
+        lock.didChangeAppLifecycleState(AppLifecycleState.paused);
+        now = now.add(const Duration(seconds: 20));
+        lock.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      });
+      expect(lock.locked, isFalse);
+      // Its resume may arrive just after the picker returned.
+      await AppLock.whileExternal(() async {
+        lock.didChangeAppLifecycleState(AppLifecycleState.paused);
+      });
+      now = now.add(const Duration(seconds: 1));
+      lock.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(lock.locked, isFalse);
+      // Leaving the app afterwards still locks.
+      now = now.add(const Duration(seconds: 5));
+      lock.didChangeAppLifecycleState(AppLifecycleState.paused);
+      lock.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      expect(lock.locked, isTrue);
+      lock.dispose();
+    });
+
     test(
       'biometrics need a successful scan to turn on and to unlock',
       () async {
