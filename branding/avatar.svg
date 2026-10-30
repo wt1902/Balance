@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
+      <stop offset="0" stop-color="#2a2368"/>
+      <stop offset="1" stop-color="#0d0b26"/>
+    </radialGradient>
+    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d68c9"/>
+      <stop offset="1" stop-color="#3a3488"/>
+    </linearGradient>
+    <linearGradient id="stand" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b3580"/>
+      <stop offset="1" stop-color="#2b2660"/>
+    </linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2fc7b0"/>
+      <stop offset="1" stop-color="#3f6fd8"/>
+    </linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff8a5c"/>
+      <stop offset="1" stop-color="#e2475f"/>
+    </linearGradient>
+    <radialGradient id="ball" cx="38%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#ffb08f"/>
+      <stop offset="0.5" stop-color="#f2614f"/>
+      <stop offset="1" stop-color="#b7323f"/>
+    </radialGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10"/>
+    </filter>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#05040f" flood-opacity="0.6"/>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- desktop monitor -->
+  <path d="M214 380 h56 l10 44 h-76 z" fill="url(#stand)"/>
+  <rect x="166" y="420" width="152" height="18" rx="9" fill="url(#stand)"/>
+  <rect x="44" y="96" width="396" height="290" rx="34" fill="url(#frame)"/>
+  <rect x="62" y="114" width="360" height="254" rx="20" fill="#07061a"/>
+
+  <!-- soft glow behind the mark -->
+  <ellipse cx="226" cy="241" rx="70" ry="78" fill="#4c45c2" opacity="0.45" filter="url(#glow)"/>
+
+  <!-- balance mark: two loops and a ball, as in the app icon -->
+  <rect x="172" y="160" width="108" height="82" rx="41" fill="none" stroke="url(#teal)" stroke-width="24"/>
+  <rect x="172" y="240" width="108" height="82" rx="41" fill="none" stroke="url(#coral)" stroke-width="24"/>
+  <path d="M184 201 v36" stroke="url(#teal)" stroke-width="24" stroke-linecap="round"/>
+  <circle cx="226" cy="241" r="21" fill="url(#ball)"/>
+  <ellipse cx="220" cy="233" rx="7" ry="4.5" fill="#ffffff" opacity="0.35"/>
+
+  <!-- phone in front of the monitor -->
+  <g filter="url(#shadow)">
+    <rect x="340" y="214" width="134" height="250" rx="28" fill="url(#frame)"/>
+    <rect x="352" y="226" width="110" height="226" rx="18" fill="#07061a"/>
+  </g>
+  <!-- tiny overview: balance card and income/expense bars -->
+  <rect x="364" y="246" width="86" height="44" rx="10" fill="#4c45c2"/>
+  <rect x="374" y="258" width="40" height="7" rx="3.5" fill="#ffffff" opacity="0.55"/>
+  <rect x="374" y="272" width="58" height="9" rx="4.5" fill="#ffffff" opacity="0.9"/>
+  <rect x="364" y="304" width="86" height="12" rx="6" fill="#1b1840"/>
+  <rect x="364" y="304" width="64" height="12" rx="6" fill="url(#teal)"/>
+  <rect x="364" y="326" width="86" height="12" rx="6" fill="#1b1840"/>
+  <rect x="364" y="326" width="40" height="12" rx="6" fill="url(#coral)"/>
+  <rect x="364" y="348" width="86" height="12" rx="6" fill="#1b1840"/>
+  <rect x="364" y="348" width="52" height="12" rx="6" fill="url(#teal)"/>
+  <rect x="380" y="430" width="54" height="6" rx="3" fill="#ffffff" opacity="0.25"/>
+</svg>

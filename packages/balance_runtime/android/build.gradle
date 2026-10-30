@@ -1,0 +1,20 @@
+group 'com.balance.runtime'
+version '1.0'
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.balance.runtime'
+    compileSdk 36
+    defaultConfig {
+        minSdk 23
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}

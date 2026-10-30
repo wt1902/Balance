@@ -1,0 +1,60 @@
+name: Flutter
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FLUTTER_VERSION: '3.47.8'
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {platform: web, os: ubuntu-latest, artifact: 'build/web'}
+          - {platform: android, os: ubuntu-latest, artifact: 'build/app/outputs/flutter-apk/*.apk'}
+          - {platform: linux, os: ubuntu-latest, artifact: 'build/linux/x64/release/bundle'}
+          - {platform: windows, os: windows-latest, artifact: 'build/windows/x64/runner/Release'}
+          - {platform: ios, os: macos-latest, artifact: 'build/ios/iphoneos/*.app'}
+          - {platform: macos, os: macos-latest, artifact: 'build/macos/Build/Products/Release/*.app'}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Linux dependencies
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libstdc++-12-dev libsecret-1-dev libjsoncpp-dev
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - run: bash scripts/build.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: balance-${{ matrix.platform }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error

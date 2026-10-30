@@ -1,0 +1,816 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
+
+import '../domain/finance.dart';
+import '../domain/appearance.dart';
+import 'storage.dart';
+import 'runtime_lock.dart';
+import 'sync_api.dart';
+
+class AuthSession {
+  AuthSession(this.data) {
+    if (userId.isEmpty ||
+        email.isEmpty ||
+        accessToken.isEmpty ||
+        refreshToken.isEmpty ||
+        expiresAt.millisecondsSinceEpoch <= 0) {
+      throw const FormatException('Invalid saved session');
+    }
+  }
+  final Map<String, dynamic> data;
+  String get userId => (data['user'] as Map)['id'] as String;
+  String get email => (data['user'] as Map)['email'] as String;
+  String get accessToken => data['accessToken'] as String;
+  String get refreshToken => data['refreshToken'] as String;
+  DateTime get expiresAt => DateTime.parse(data['expiresAt'] as String);
+}
+
+/// All durable mutations and account transitions share one queue. A pull page
+/// writes records, tombstones, dirty changes and cursor in one database commit.
+class AppStore extends ChangeNotifier with WidgetsBindingObserver {
+  AppStore({
+    SnapshotStorage? storage,
+    FlutterSecureStorage? secureStorage,
+    SyncApi Function(String serverUrl)? apiFactory,
+    this.background = false,
+  }) : _storage = storage,
+       _injectedStorage = storage != null,
+       _apiFactory = apiFactory,
+       _secureStorage = secureStorage ?? const FlutterSecureStorage();
+  SnapshotStorage? _storage;
+  final bool background;
+  final bool _injectedStorage;
+  final RuntimeLock _runtimeLock = RuntimeLock();
+  AuthSession? _volatileSession;
+  String? _volatileRevision;
+  String? _volatileServer;
+  final SyncApi Function(String serverUrl)? _apiFactory;
+  final FlutterSecureStorage _secureStorage;
+  SharedPreferences? _preferences;
+  Future<void> _tail = Future<void>.value();
+  Timer? _timer;
+  bool _disposed = false;
+  bool ready = false;
+  bool syncing = false;
+  String? error;
+  String? syncMessage;
+  DateTime? lastSyncAt;
+  String serverUrl = '';
+  String currency = 'RUB';
+  String theme = 'system';
+  String themePreset = 'forest';
+  AuthSession? session;
+  String? sessionPersistenceWarning;
+  String get email => session?.email ?? '';
+  String _deviceId = '';
+  String _scope = '';
+  int _cursor = 0;
+  final Map<String, TransactionRecord> _transactions = {};
+  final Map<String, CategoryRecord> _categories = {};
+  final Map<String, BudgetRecord> _budgets = {};
+  final Map<String, Map<String, dynamic>> _tombstones = {};
+  final Map<String, Map<String, dynamic>> _dirty = {};
+
+  List<TransactionRecord> get transactions =>
+      _transactions.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+  List<CategoryRecord> get categories =>
+      _categories.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+  List<BudgetRecord> get budgets =>
+      _budgets.values.toList()
+        ..sort((a, b) => b.monthStart.compareTo(a.monthStart));
+  int get balanceMinor => _transactions.values.fold(
+    0,
+    (sum, t) =>
+        sum + (t.kindRawValue == 'income' ? t.amountMinor : -t.amountMinor),
+  );
+  int get pendingChangeCount => _dirty.length;
+  int get cursor => _cursor;
+  static String newId() => const Uuid().v4();
+
+  Future<T> _exclusive<T>(Future<T> Function() body) {
+    final result = _tail.then((_) async {
+      if (_disposed) throw StateError('AppStore is closed');
+      if (!_injectedStorage) await _runtimeLock.acquire();
+      try {
+        if (ready) await _reloadSharedState();
+        return await body();
+      } finally {
+        if (!_injectedStorage) await _runtimeLock.release();
+      }
+    });
+    _tail = result.then<void>((_) {}, onError: (Object _, StackTrace _) {});
+    return result;
+  }
+
+  void _notify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  void clearError() {
+    error = null;
+    _notify();
+  }
+
+  Future<void> initialize() => _exclusive(() async {
+    if (ready) return;
+    _preferences = await SharedPreferences.getInstance();
+    await _preferences!.reload();
+    serverUrl = _preferences!.getString('serverUrl') ?? serverUrl;
+    currency = _preferences!.getString('currency') ?? currency;
+    theme = _preferences!.getString('theme') ?? theme;
+    themePreset = ColorPreset.fromId(_preferences!.getString('themePreset')).id;
+    _deviceId = _preferences!.getString('deviceId') ?? newId();
+    await _preferences!.setString('deviceId', _deviceId);
+    _storage ??= await LedgerStorage.open();
+    await _restoreSession();
+    await _loadScope();
+    if (!background) {
+      WidgetsBinding.instance.addObserver(this);
+      _timer = Timer.periodic(const Duration(minutes: 2), (_) {
+        _backgroundSync();
+      });
+    }
+    ready = true;
+    _notify();
+    if (!background) _backgroundSync();
+  });
+
+  Future<void> _reloadSharedState() async {
+    await _preferences!.reload();
+    final nextServer = _preferences!.getString('serverUrl') ?? '';
+    if (nextServer != serverUrl) {
+      _apiInstance?.close();
+      _apiInstance = null;
+      serverUrl = nextServer;
+    }
+    currency = _preferences!.getString('currency') ?? 'RUB';
+    theme = _preferences!.getString('theme') ?? 'system';
+    themePreset = ColorPreset.fromId(_preferences!.getString('themePreset')).id;
+    _deviceId = _preferences!.getString('deviceId') ?? _deviceId;
+    await _restoreSession();
+    await _loadScope();
+    _notify();
+  }
+
+  Future<void> _restoreSession() async {
+    session = null;
+    final revision = _preferences!.getString('sessionRevision.$serverUrl');
+    if (_volatileServer == serverUrl &&
+        _volatileRevision == revision &&
+        _volatileSession != null) {
+      session = _volatileSession;
+      return;
+    }
+    _volatileSession = null;
+    _volatileRevision = null;
+    _volatileServer = null;
+    String? saved;
+    try {
+      if (!(_preferences!.getBool('sessionDisabled.$serverUrl') ?? false)) {
+        saved = await _secureStorage.read(key: _credentialKey);
+      }
+    } catch (_) {
+      _sessionStorageUnavailable();
+    }
+    if (saved != null) {
+      try {
+        session = AuthSession(
+          Map<String, dynamic>.from(jsonDecode(saved) as Map),
+        );
+      } catch (_) {
+        await _deleteCredentials();
+      }
+    }
+  }
+
+  void _sessionStorageUnavailable() {
+    sessionPersistenceWarning =
+        'Защищённое хранилище недоступно. Вход действует до закрытия приложения.';
+    syncMessage = sessionPersistenceWarning;
+  }
+
+  Future<void> _saveCredentials(Map<String, dynamic> value) async {
+    try {
+      await _secureStorage.write(key: _credentialKey, value: jsonEncode(value));
+      await _preferences!.setBool('sessionDisabled.$serverUrl', false);
+      await _preferences!.setString('sessionRevision.$serverUrl', newId());
+      _volatileSession = null;
+      _volatileRevision = null;
+      _volatileServer = null;
+    } catch (_) {
+      await _preferences!.setBool('sessionDisabled.$serverUrl', true);
+      _volatileRevision = newId();
+      await _preferences!.setString(
+        'sessionRevision.$serverUrl',
+        _volatileRevision!,
+      );
+      _volatileSession = AuthSession(value);
+      _volatileServer = serverUrl;
+      _sessionStorageUnavailable();
+    }
+  }
+
+  Future<void> _deleteCredentials() async {
+    // A failed secure delete must not restore a signed-out account next launch.
+    await _preferences!.setBool('sessionDisabled.$serverUrl', true);
+    await _preferences!.setString('sessionRevision.$serverUrl', newId());
+    _volatileSession = null;
+    _volatileRevision = null;
+    _volatileServer = null;
+    try {
+      await _secureStorage.delete(key: _credentialKey);
+    } catch (_) {
+      _sessionStorageUnavailable();
+    }
+  }
+
+  String get _credentialKey =>
+      'balance.session.${Uri.encodeComponent(serverUrl)}';
+  String _scopeFor(String? userId) => '$serverUrl|${userId ?? 'guest'}';
+  SyncApi? _apiInstance;
+  SyncApi get _api => _apiInstance ??=
+      _apiFactory?.call(serverUrl) ??
+      SyncApi(
+        serverUrl: serverUrl,
+        allowInsecureHttp: [
+          'localhost',
+          '127.0.0.1',
+          '::1',
+          '10.0.2.2',
+        ].contains(Uri.parse(serverUrl).host),
+      );
+
+  List<CategoryRecord> categoriesForKind(Object kind) {
+    final raw = kind is TransactionKind ? kind.name : kind.toString();
+    final combined = <String, CategoryRecord>{
+      for (final category in BuiltInCategories.forKind(raw))
+        category.name: category,
+      for (final category in categories.where((c) => c.kindRawValue == raw))
+        category.name: category,
+    };
+    return combined.values.toList();
+  }
+
+  Future<void> _loadScope() async {
+    _scope = _scopeFor(session?.userId);
+    final raw = await _storage!.read(_scope);
+    _transactions.clear();
+    _categories.clear();
+    _budgets.clear();
+    _dirty.clear();
+    _tombstones.clear();
+    _cursor = 0;
+    lastSyncAt = null;
+    if (raw == null) return;
+    for (final item in (raw['transactions'] as List? ?? [])) {
+      final record = TransactionRecord.fromJson(
+        Map<String, dynamic>.from(item as Map),
+      );
+      _transactions[record.id] = record;
+    }
+    for (final item in (raw['categories'] as List? ?? [])) {
+      final record = CategoryRecord.fromJson(
+        Map<String, dynamic>.from(item as Map),
+      );
+      _categories[record.id] = record;
+    }
+    for (final item in (raw['budgets'] as List? ?? [])) {
+      final record = BudgetRecord.fromJson(
+        Map<String, dynamic>.from(item as Map),
+      );
+      _budgets[record.id] = record;
+    }
+    for (final item in (raw['dirty'] as List? ?? [])) {
+      final change = Map<String, dynamic>.from(item as Map);
+      _dirty[_key(change)] = change;
+    }
+    for (final item in (raw['tombstones'] as List? ?? [])) {
+      final change = Map<String, dynamic>.from(item as Map);
+      _tombstones[_key(change)] = change;
+    }
+    _cursor = (raw['cursor'] as num?)?.toInt() ?? 0;
+    lastSyncAt = DateTime.tryParse(raw['lastSyncAt'] as String? ?? '');
+  }
+
+  Map<String, dynamic> _snapshot() => {
+    'transactions': _transactions.values.map((e) => e.toJson()).toList(),
+    'categories': _categories.values.map((e) => e.toJson()).toList(),
+    'budgets': _budgets.values.map((e) => e.toJson()).toList(),
+    'dirty': _dirty.values.toList(),
+    'tombstones': _tombstones.values.toList(),
+    'cursor': _cursor,
+    'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
+  };
+  Future<void> _persist() => _storage!.write(_scope, _snapshot());
+  String _key(Map<String, dynamic> change) =>
+      '${change['entity']}:${change['id']}';
+  Map<String, dynamic> _change(
+    String entity,
+    String id,
+    DateTime time,
+    Map<String, dynamic>? payload,
+  ) => {
+    'entity': entity,
+    'id': id,
+    'updatedAt': time.toUtc().toIso8601String(),
+    'deleted': payload == null,
+    'payload': ?payload,
+  };
+  DateTime _now() {
+    // Strictly advance local timestamps even for successive edits in one tick.
+    var now = DateTime.now().toUtc();
+    for (final change in _dirty.values) {
+      final previous = DateTime.parse(change['updatedAt'] as String);
+      if (!now.isAfter(previous)) {
+        now = previous.add(const Duration(microseconds: 1));
+      }
+    }
+    return now;
+  }
+
+  void _queueChange(Map<String, dynamic> change) {
+    final key = _key(change);
+    _dirty[key] = change;
+    if (change['deleted'] == true) {
+      _tombstones[key] = change;
+    } else {
+      _tombstones.remove(key);
+    }
+  }
+
+  Future<void> _edited() async {
+    try {
+      await _persist();
+    } catch (_) {
+      await _loadScope();
+      rethrow;
+    }
+    _notify();
+  }
+
+  Future<void> saveTransaction(TransactionRecord record) =>
+      _exclusive(() async {
+        if (record.amountMinor <= 0) {
+          throw ArgumentError('Сумма должна быть больше нуля');
+        }
+        final saved = record.copyWith(updatedAt: _now());
+        _transactions[saved.id] = saved;
+        _queueChange(
+          _change('transaction', saved.id, saved.updatedAt, saved.payload()),
+        );
+        await _edited();
+      });
+  Future<void> deleteTransaction(String id) => _delete('transaction', id);
+  Future<void> deleteBudget(String id) => _delete('budget', id);
+  Future<void> deleteCategory(String id) => _delete('category', id);
+  Future<void> _delete(String entity, String id) => _exclusive(() async {
+    if (entity == 'transaction') _transactions.remove(id);
+    if (entity == 'category') {
+      final category = _categories.remove(id);
+      if (category != null && category.kindRawValue == 'expense') {
+        for (final budget
+            in _budgets.values
+                .where((b) => b.categoryName == category.name)
+                .toList()) {
+          _budgets.remove(budget.id);
+          _queueChange(_change('budget', budget.id, _now(), null));
+        }
+      }
+    }
+    if (entity == 'budget') _budgets.remove(id);
+    _queueChange(_change(entity, id, _now(), null));
+    await _edited();
+  });
+
+  Future<void> saveCategory(CategoryRecord record) => _exclusive(() async {
+    if (record.name.trim().isEmpty) {
+      throw ArgumentError('Введите название категории');
+    }
+    final saved = record.copyWith(name: record.name.trim(), updatedAt: _now());
+    if (_categories.values.any(
+      (c) =>
+          c.id != saved.id &&
+          c.name == saved.name &&
+          c.kindRawValue == saved.kindRawValue,
+    )) {
+      throw ArgumentError('Такая категория уже существует');
+    }
+    final previous = _categories[saved.id];
+    _categories[saved.id] = saved;
+    _queueChange(
+      _change('category', saved.id, saved.updatedAt, saved.payload()),
+    );
+    if (previous != null) {
+      for (final tx in _transactions.values.toList()) {
+        if (tx.categoryName != previous.name ||
+            tx.kindRawValue != previous.kindRawValue) {
+          continue;
+        }
+        final changed = tx.copyWith(
+          categoryName: saved.name,
+          categoryIcon: saved.icon,
+          categoryEmoji: saved.emoji,
+          categoryColorName: saved.colorName,
+          updatedAt: saved.updatedAt,
+        );
+        _transactions[tx.id] = changed;
+        _queueChange(
+          _change('transaction', tx.id, changed.updatedAt, changed.payload()),
+        );
+      }
+      for (final budget in _budgets.values.toList()) {
+        if (budget.categoryName != previous.name) continue;
+        final changed = budget.copyWith(
+          categoryName: saved.name,
+          categoryIcon: saved.icon,
+          categoryEmoji: saved.emoji,
+          updatedAt: saved.updatedAt,
+        );
+        _budgets[budget.id] = changed;
+        _queueChange(
+          _change('budget', budget.id, changed.updatedAt, changed.payload()),
+        );
+      }
+    }
+    await _edited();
+  });
+  Future<void> saveBudget(BudgetRecord record) => _exclusive(() async {
+    if (record.limitMinor <= 0) {
+      throw ArgumentError('Лимит должен быть больше нуля');
+    }
+    final localMonth = record.monthStart.toLocal();
+    final month = DateTime(localMonth.year, localMonth.month);
+    if (_budgets.values.any(
+      (b) =>
+          b.id != record.id &&
+          b.categoryName == record.categoryName &&
+          b.monthStart.toLocal().year == month.year &&
+          b.monthStart.toLocal().month == month.month,
+    )) {
+      throw ArgumentError('Бюджет для этой категории уже существует');
+    }
+    final saved = record.copyWith(monthStart: month, updatedAt: _now());
+    _budgets[saved.id] = saved;
+    _queueChange(_change('budget', saved.id, saved.updatedAt, saved.payload()));
+    await _edited();
+  });
+  Future<void> adjustBalance(int targetMinor, {String note = ''}) =>
+      _exclusive(() async {
+        final delta = targetMinor - balanceMinor;
+        if (delta == 0) return;
+        final now = _now();
+        final record = TransactionRecord(
+          id: newId(),
+          amountMinor: delta.abs(),
+          date: now,
+          categoryName: 'Корректировка',
+          updatedAt: now,
+          note: note.isEmpty ? 'Ручная корректировка баланса' : note,
+          isBalanceAdjustment: true,
+          kindRawValue: delta > 0 ? 'income' : 'expense',
+        );
+        _transactions[record.id] = record;
+        _queueChange(_change('transaction', record.id, now, record.payload()));
+        await _edited();
+      });
+
+  Future<void> setCurrency(String value) => _exclusive(() async {
+    currency = value;
+    await _preferences!.setString('currency', value);
+    _notify();
+  });
+  Future<void> setTheme(String value) => _exclusive(() async {
+    if (!const ['system', 'light', 'dark'].contains(value)) {
+      throw ArgumentError('Неизвестный режим темы');
+    }
+    theme = value;
+    await _preferences!.setString('theme', value);
+    _notify();
+  });
+  Future<void> setThemePreset(String value) => _exclusive(() async {
+    if (!ColorPreset.values.any((preset) => preset.id == value)) {
+      throw ArgumentError('Неизвестный пресет');
+    }
+    await _preferences!.setString('themePreset', value);
+    themePreset = value;
+    if (value == ColorPreset.oled.id) {
+      await _preferences!.setString('theme', 'dark');
+      theme = 'dark';
+    }
+    _notify();
+  });
+
+  Future<void> setServerUrl(String value) => _exclusive(() async {
+    final normalized = value.trim().replaceAll(RegExp(r'/+$'), '');
+    final uri = Uri.tryParse(normalized);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        !['http', 'https'].contains(uri.scheme)) {
+      throw ArgumentError('Укажите полный адрес сервера');
+    }
+    // Validate the transport before clearing an existing account or changing its scope.
+    final validation = SyncApi(
+      serverUrl: normalized,
+      allowInsecureHttp: const [
+        'localhost',
+        '127.0.0.1',
+        '::1',
+        '10.0.2.2',
+      ].contains(uri.host),
+    );
+    validation.close();
+    if (normalized == serverUrl) return;
+    final unconfiguredGuest = serverUrl.isEmpty && session == null
+        ? _snapshot()
+        : null;
+    await _deleteCredentials();
+    session = null;
+    _apiInstance?.close();
+    _apiInstance = null;
+    serverUrl = normalized;
+    await _preferences!.setString('serverUrl', normalized);
+    // Credentials are deliberately not restored when switching servers.
+    await _deleteCredentials();
+    if (unconfiguredGuest != null &&
+        await _storage!.read(_scopeFor(null)) == null) {
+      await _storage!.write(_scopeFor(null), unconfiguredGuest);
+    }
+    await _loadScope();
+    error = null;
+    syncMessage = null;
+    _notify();
+  });
+
+  Future<void> signIn(String email, String password) =>
+      _authenticate(email, password, false);
+  Future<void> register(String email, String password) =>
+      _authenticate(email, password, true);
+  Future<void> _authenticate(
+    String email,
+    String password,
+    bool register,
+  ) => _exclusive(() async {
+    final response = register
+        ? await _api.register(email, password)
+        : await _api.login(email, password);
+    final nextSession = AuthSession(response);
+    final nextScope = _scopeFor(nextSession.userId);
+    final exists = await _storage!.read(nextScope);
+    final marker = 'importedGuest.$serverUrl';
+    final guest =
+        session == null &&
+            exists == null &&
+            !(_preferences!.getBool(marker) ?? false)
+        ? _snapshot()
+        : null;
+    session = nextSession;
+    await _saveCredentials(response);
+    await _loadScope();
+    if (guest != null) {
+      await _storage!.write(_scope, guest);
+      await _loadScope();
+      _cursor = 0;
+      // Imported rows may have been synced under another prior guest snapshot.
+      for (final t in _transactions.values) {
+        _queueChange(_change('transaction', t.id, t.updatedAt, t.payload()));
+      }
+      for (final c in _categories.values) {
+        _queueChange(_change('category', c.id, c.updatedAt, c.payload()));
+      }
+      for (final b in _budgets.values) {
+        _queueChange(_change('budget', b.id, b.updatedAt, b.payload()));
+      }
+      await _persist();
+      await _preferences!.setBool(marker, true);
+    }
+    error = null;
+    _notify();
+    await _syncLocked();
+  });
+  Future<void> signOut() => _exclusive(() async {
+    final old = session;
+    // Local logout succeeds even if the network is unavailable.
+    session = null;
+    await _deleteCredentials();
+    await _loadScope();
+    error = null;
+    syncMessage = null;
+    _notify();
+    if (old != null) {
+      try {
+        await _api.logout(old.refreshToken);
+      } catch (_) {}
+    }
+  });
+
+  Future<String> _accessToken({bool force = false}) async {
+    final current = session;
+    if (current == null) throw StateError('Войдите в аккаунт');
+    if (!force &&
+        current.expiresAt.isAfter(
+          DateTime.now().add(const Duration(minutes: 1)),
+        )) {
+      return current.accessToken;
+    }
+    final refreshed = await _api.refresh(current.refreshToken);
+    session = AuthSession(refreshed);
+    await _saveCredentials(refreshed);
+    return session!.accessToken;
+  }
+
+  Future<void> sync() => _exclusive(_syncLocked);
+  Future<void> resetAndSync() => _exclusive(() async {
+    _cursor = 0;
+    for (final t in _transactions.values) {
+      _queueChange(_change('transaction', t.id, t.updatedAt, t.payload()));
+    }
+    for (final c in _categories.values) {
+      _queueChange(_change('category', c.id, c.updatedAt, c.payload()));
+    }
+    for (final b in _budgets.values) {
+      _queueChange(_change('budget', b.id, b.updatedAt, b.payload()));
+    }
+    for (final tombstone in _tombstones.values.toList()) {
+      _queueChange(tombstone);
+    }
+    await _persist();
+    await _syncLocked();
+  });
+  Future<void> _syncLocked() async {
+    if (session == null || syncing) return;
+    syncing = true;
+    error = null;
+    syncMessage = 'Синхронизация…';
+    _notify();
+    final sent = Map<String, Map<String, dynamic>>.from(_dirty);
+    try {
+      Future<int> run() => _api.synchronize(
+        accessToken: _accessToken,
+        cursor: _cursor,
+        deviceId: _deviceId,
+        changes: sent.values.toList(),
+        applyPage: _applyPage,
+      );
+      try {
+        await run();
+      } on SyncApiException catch (e) {
+        if (e.statusCode != 401) rethrow;
+        await _accessToken(force: true);
+        await run();
+      }
+      // Only acknowledge precisely the pushed revision, never a newer local edit.
+      for (final entry in sent.entries) {
+        if (_dirty[entry.key]?['updatedAt'] == entry.value['updatedAt']) {
+          _dirty.remove(entry.key);
+        }
+      }
+      lastSyncAt = DateTime.now();
+      await _persist();
+      syncMessage =
+          sessionPersistenceWarning ??
+          (_dirty.isEmpty
+              ? 'Синхронизировано'
+              : 'Есть изменения для следующей синхронизации');
+    } catch (e) {
+      error = e is SyncApiException
+          ? e.message
+          : 'Не удалось синхронизировать: $e';
+      syncMessage = 'Изменения сохранены на устройстве';
+      rethrow;
+    } finally {
+      syncing = false;
+      _notify();
+    }
+  }
+
+  Future<void> _applyPage(
+    List<Map<String, dynamic>> changes,
+    int cursor,
+  ) async {
+    try {
+      for (final change in changes) {
+        _merge(change);
+      }
+      _cursor = cursor;
+      await _persist();
+    } catch (_) {
+      // Disk failure must not advance the in-memory cursor past an uncommitted page.
+      await _loadScope();
+      rethrow;
+    }
+  }
+
+  void _merge(Map<String, dynamic> change) {
+    final key = _key(change);
+    final entity = change['entity'] as String;
+    final id = change['id'] as String;
+    final incoming = DateTime.parse(change['updatedAt'] as String);
+    final pending = _dirty[key];
+    // Preserve the user's pending deletion. A newer server edit means its LWW
+    // delete needs a newer revision, which remains dirty for the next push.
+    if (pending?['deleted'] == true && change['deleted'] != true) {
+      if (!DateTime.parse(pending!['updatedAt'] as String).isAfter(incoming)) {
+        _queueChange(
+          _change(
+            entity,
+            id,
+            incoming.add(const Duration(microseconds: 1)),
+            null,
+          ),
+        );
+      }
+      return;
+    }
+    if (pending != null &&
+        !incoming.isAfter(DateTime.parse(pending['updatedAt'] as String))) {
+      return;
+    }
+    final tombstone = _tombstones[key];
+    if (tombstone != null &&
+        !incoming.isAfter(DateTime.parse(tombstone['updatedAt'] as String))) {
+      return;
+    }
+    DateTime? local;
+    if (entity == 'transaction') local = _transactions[id]?.updatedAt;
+    if (entity == 'category') local = _categories[id]?.updatedAt;
+    if (entity == 'budget') local = _budgets[id]?.updatedAt;
+    if (local != null && incoming.isBefore(local)) return;
+    if (change['deleted'] == true) {
+      if (entity == 'transaction') _transactions.remove(id);
+      if (entity == 'category') _categories.remove(id);
+      if (entity == 'budget') _budgets.remove(id);
+      _tombstones[key] = Map<String, dynamic>.from(change);
+    } else {
+      final payload = Map<String, dynamic>.from(change['payload'] as Map);
+      if (entity == 'transaction') {
+        _transactions[id] = TransactionRecord.fromPayload(
+          id: id,
+          updatedAt: incoming,
+          payload: payload,
+        );
+      }
+      if (entity == 'category') {
+        _categories[id] = CategoryRecord.fromPayload(
+          id: id,
+          updatedAt: incoming,
+          payload: payload,
+        );
+      }
+      if (entity == 'budget') {
+        _budgets[id] = BudgetRecord.fromPayload(
+          id: id,
+          updatedAt: incoming,
+          payload: payload,
+        );
+      }
+      _tombstones.remove(key);
+    }
+    if (pending != null &&
+        incoming.isAfter(DateTime.parse(pending['updatedAt'] as String))) {
+      _dirty.remove(key);
+    }
+  }
+
+  void _backgroundSync() {
+    if (ready && session != null) unawaited(sync().catchError((Object _) {}));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _backgroundSync();
+    }
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _timer?.cancel();
+      _timer = null;
+    } else if (state == AppLifecycleState.resumed) {
+      _timer ??= Timer.periodic(const Duration(minutes: 2), (_) {
+        _backgroundSync();
+      });
+    }
+  }
+
+  /// Wait for all serialized work before a headless engine exits.
+  Future<void> close() async {
+    await _tail;
+    _apiInstance?.close();
+    _apiInstance = null;
+    await _storage?.close();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    _timer?.cancel();
+    if (!background) WidgetsBinding.instance.removeObserver(this);
+    unawaited(close());
+    super.dispose();
+  }
+}

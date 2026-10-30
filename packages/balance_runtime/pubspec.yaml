@@ -1,0 +1,16 @@
+name: balance_runtime
+description: Shared Android ledger lock for foreground and background Flutter engines.
+version: 1.0.0
+publish_to: none
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+  flutter: '>=3.22.0'
+dependencies:
+  flutter:
+    sdk: flutter
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.balance.runtime
+        pluginClass: BalanceRuntimePlugin

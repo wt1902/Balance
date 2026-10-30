@@ -1,0 +1,42 @@
+name: balance_flutter
+description: Local-first personal finance with BalanceServer synchronization.
+publish_to: none
+version: 4.1.0+2
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  cupertino_icons: ^2.0.0
+  http: ^1.5.0
+  intl: any
+  uuid: ^4.5.1
+  sembast: ^3.8.5
+  sembast_web: ^2.4.2
+  path_provider: ^2.1.5
+  flutter_secure_storage: ^11.2.0
+  file_selector: ^1.0.3
+  share_plus: ^13.3.1
+  cross_file: ^0.3.4+2
+  shared_preferences: ^2.5.3
+  workmanager: ^0.10.10
+  balance_runtime:
+    path: packages/balance_runtime
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/LICENSE.txt
+  fonts:
+    - family: BalanceRoboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
