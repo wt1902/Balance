@@ -3,11 +3,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
-import 'package:file_selector/file_selector.dart';
-import 'package:share_plus/share_plus.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
 import 'app_theme.dart';
+import 'data_tools.dart';
 import '../services/app_store.dart';
 import 'design.dart';
 import 'editors.dart';
@@ -1301,10 +1300,38 @@ class _BalanceShellState extends State<BalanceShell> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           sectionTitle('Данные'),
+          if (store.quarantine.isNotEmpty) ...[
+            QuarantinePanel(
+              entries: store.quarantine,
+              onSave: saveQuarantine,
+              onClear: clearQuarantine,
+            ),
+            const SizedBox(height: 16),
+          ],
+          const Text(
+            'Резервная копия хранит все операции, категории и бюджеты без потерь. '
+            'Восстановление добавляет записи из копии и не затирает более новые изменения.',
+          ),
+          const SizedBox(height: 16),
           Wrap(
             spacing: 12,
             runSpacing: 12,
             children: [
+              FilledButton.tonalIcon(
+                onPressed: backup,
+                icon: const Icon(Icons.backup_outlined),
+                label: const Text('Резервная копия'),
+              ),
+              OutlinedButton.icon(
+                onPressed: restore,
+                icon: const Icon(Icons.settings_backup_restore),
+                label: const Text('Восстановить из копии'),
+              ),
+              OutlinedButton.icon(
+                onPressed: importStatement,
+                icon: const Icon(Icons.account_balance_outlined),
+                label: const Text('Импорт выписки банка'),
+              ),
               OutlinedButton.icon(
                 onPressed: export,
                 icon: const Icon(Icons.download_outlined),
@@ -1314,7 +1341,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 onPressed: () => showAboutDialog(
                   context: context,
                   applicationName: 'Баланс',
-                  applicationVersion: '4.1.1',
+                  applicationVersion: '4.2.0',
                   applicationIcon: const Icon(
                     Icons.account_balance_wallet_outlined,
                     size: 40,
@@ -1474,44 +1501,111 @@ class _BalanceShellState extends State<BalanceShell> {
     password.dispose();
   }
 
-  Future<void> export() async {
+  Future<void> export() => run(
+    () => saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(FinanceMath.exportCsv(store.transactions)),
+      ),
+      name: 'balance-transactions.csv',
+      mimeType: 'text/csv',
+      label: 'CSV',
+      extension: 'csv',
+    ),
+  );
+
+  Future<void> backup() => run(() async {
+    final data = await store.exportBackup();
+    if (!mounted) return;
+    final day = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    await saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(const JsonEncoder.withIndent(' ').convert(data)),
+      ),
+      name: 'balance-backup-$day.json',
+      mimeType: 'application/json',
+      label: 'JSON',
+      extension: 'json',
+    );
+  });
+
+  Future<void> restore() async {
+    final file = await pickFile('Резервная копия', ['json']);
+    if (file == null || !mounted) return;
+    if (!await confirmDelete(
+      context,
+      'Восстановить из копии?',
+      message:
+          'Записи из «${file.name}» будут добавлены к данным на устройстве и синхронизированы. '
+          'Более новые изменения на устройстве сохранятся.',
+      action: 'Восстановить',
+    )) {
+      return;
+    }
     await run(() async {
-      final csv = FinanceMath.exportCsv(store.transactions);
-      final bytes = Uint8List.fromList(utf8.encode(csv));
-      if (!kIsWeb &&
-          (defaultTargetPlatform == TargetPlatform.android ||
-              defaultTargetPlatform == TargetPlatform.iOS)) {
-        final box = context.findRenderObject() as RenderBox?;
-        await SharePlus.instance.share(
-          ShareParams(
-            files: [
-              XFile.fromData(
-                bytes,
-                mimeType: 'text/csv',
-                name: 'balance-transactions.csv',
-              ),
-            ],
-            fileNameOverrides: ['balance-transactions.csv'],
-            sharePositionOrigin: box == null
-                ? null
-                : box.localToGlobal(Offset.zero) & box.size,
-          ),
-        );
-      } else {
-        final location = await getSaveLocation(
-          suggestedName: 'balance-transactions.csv',
-          acceptedTypeGroups: const [
-            XTypeGroup(label: 'CSV', extensions: ['csv']),
-          ],
-        );
-        if (location != null) {
-          await XFile.fromData(
-            bytes,
-            mimeType: 'text/csv',
-            name: 'balance-transactions.csv',
-          ).saveTo(location.path);
-        }
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(utf8.decode(await file.readAsBytes()));
+      } on FormatException {
+        throw const FormatException('Файл повреждён или это не JSON');
+      }
+      final result = await store.restoreBackup(decoded);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.describe())));
       }
     });
+  }
+
+  Future<void> importStatement() async {
+    final file = await pickFile(
+      'Выписка',
+      ['csv', 'txt', 'ofx', 'qfx'],
+      androidMimeTypes: const [
+        'application/x-ofx',
+        'application/vnd.intu.qfx',
+        'application/octet-stream',
+      ],
+    );
+    if (file == null || !mounted) return;
+    await run(() async {
+      final records = await runStatementImport(context, store, file);
+      if (records == null) return;
+      final added = await store.importTransactions(records);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Импортировано операций: $added')),
+        );
+      }
+    });
+  }
+
+  Future<void> saveQuarantine() => run(
+    () => saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(
+          const JsonEncoder.withIndent(' ').convert(store.quarantineReport()),
+        ),
+      ),
+      name: 'balance-damaged-records.json',
+      mimeType: 'application/json',
+      label: 'JSON',
+      extension: 'json',
+    ),
+  );
+
+  Future<void> clearQuarantine() async {
+    if (await confirmDelete(
+      context,
+      'Очистить отложенные записи?',
+      message:
+          'Копии повреждённых записей будут удалены с устройства. Сначала сохраните отчёт, если они нужны.',
+      action: 'Очистить',
+    )) {
+      await run(store.clearQuarantine);
+    }
   }
 }

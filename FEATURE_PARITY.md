@@ -58,7 +58,7 @@ Source audit of the Swift iOS/macOS/watchOS and Kotlin Android applications. Sta
 12. **Emoji:** iOS limits input to one grapheme; Mac/Watch take first Swift Character on save. Android accepts an arbitrary string.
 13. **Notes:** iOS/Android transaction editors trim notes, Mac/Watch do not. Adjustment defaults: iOS trims; Android uses ifBlank without trimming a nonblank note; Mac/Watch use isEmpty.
 14. **Unknown kind:** Apple getter defaults to expense. Android totalBalance subtracts unknown kind but summary/spending exclude it because they test literal `expense`.
-15. **CSV is lossy:** no UUID, kind for adjustment, flag, timestamps, category design, custom-category definitions or budgets; an expense adjustment exports positive amount with no recoverable sign. It is not a complete migration format. Formula-like notes are quoted but not neutralized by native export.
+15. **CSV is lossy:** no UUID, kind for adjustment, flag, timestamps, category design, custom-category definitions or budgets; an expense adjustment exports positive amount with no recoverable sign. It is not a complete migration format; Flutter 4.2 adds a lossless JSON backup (see Data tools 4.2). Formula-like notes are quoted but not neutralized by native export.
 16. **Sync sizes:** Apple rejects individual payload >256 KiB and splits full bodies >1.5 MB. Android splits changes arrays >1.5 MB, without the Apple single-payload guard.
 17. **Server URL:** Apple HTTP allows localhost/127.0.0.1/::1; Android localhost/127.0.0.1/10.0.2.2. Android rejects userinfo/query/fragment; Apple has no explicit equivalent rejection.
 18. **Deletion journal:** Apple UserDefaults journal quarantines corrupt data and validates UUID/entity; Android Room journal is transactional with local deletion. A successful push alone must not discard tombstones.
@@ -108,10 +108,10 @@ Additional safety/data checks from source review:
 - Transaction editor choices deduplicate imported category names to avoid duplicate dropdown-value assertions while retaining archived snapshot categories.
 - A native preexisting SwiftData/Room database is not automatically imported by the new app identity. Use the Go transfer route above; the native Watch ledger also requires the same server/account.
 - All scoped snapshots and their dirty outboxes are fully loaded into memory and rewritten as a complete snapshot on each edit/page. Large-ledger performance has not been measured.
-- Corrupt local records can currently fail initialization; the startup error view offers retry without deleting data. A quarantined backup/recovery workflow is not implemented.
-- Remote payload validation checks envelope shape but model decoding can still reject malformed fields and block a pull page. This preserves the cursor but needs diagnostics/recovery testing.
+- Corrupt local records no longer fail initialization (4.2): each is set aside into a per-scope quarantine and startup continues; see Data tools 4.2.
+- Remote payload validation checks envelope shape; a pulled change that fails model decoding is quarantined (source `server`) and skipped, the page and cursor still commit, and the sync message reports the count (4.2). Envelope/protocol errors still abort the pull.
 - Nonpositive imported budget limits do not produce division by zero; local UI requires a positive replacement limit. Invalid server data can be repaired through the editor.
-- CSV retains the native lossy adjustment-sign behavior and does not neutralize formula-like text; treat it as an export report, not a restore format.
+- CSV retains the native lossy adjustment-sign behavior and does not neutralize formula-like text; treat it as an export report; use the JSON backup (4.2) for restore.
 
 ## Android background synchronization verification
 
@@ -141,3 +141,11 @@ Desktop multiple independent app processes are not coordinated by this Web/Andro
 ## Appearance update 4.1
 
 Flutter supports system/light/dark mode plus five persisted presets (forest, indigo, ocean, rose, OLED). Selecting OLED initially enables dark mode; system mode subsequently follows OS brightness. Pure-black surfaces are checked both as theme colors and actual rendered pixels. Total Flutter tests: 62 passing. The native Watch client retains its existing appearance controls.
+
+## Data tools 4.2
+
+Flutter-only additions; the wire protocol is unchanged and there is no native equivalent.
+
+- JSON backup/restore (`balance-backup`, version 1): lossless (ids, `amountMinor`, `updatedAt`, adjustment flag, category design, custom categories, budgets, tombstones); queue and cursor are per-device and excluded. Restore merges by last-write-wins on `updatedAt`, queues restored records for sync, and rejects a newer format version.
+- Local quarantine of damaged records and failed pulled changes, with a JSON report and clear action in Settings → «Данные».
+- Bank statement import: CSV (auto delimiter and encoding, Т-Банк preset, column mapping) and OFX 1.x/2.x, with stable UUIDv5 ids so re-import adds nothing.

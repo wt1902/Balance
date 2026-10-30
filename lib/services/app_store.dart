@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
+import '../domain/backup.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
 import 'storage.dart';
@@ -75,6 +76,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, BudgetRecord> _budgets = {};
   final Map<String, Map<String, dynamic>> _tombstones = {};
   final Map<String, Map<String, dynamic>> _dirty = {};
+  final List<QuarantineEntry> _quarantine = [];
+  int _skippedFromServer = 0;
 
   List<TransactionRecord> get transactions =>
       _transactions.values.toList()..sort((a, b) => b.date.compareTo(a.date));
@@ -89,6 +92,15 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         sum + (t.kindRawValue == 'income' ? t.amountMinor : -t.amountMinor),
   );
   int get pendingChangeCount => _dirty.length;
+
+  /// Records set aside because they could not be read (see QuarantineEntry).
+  List<QuarantineEntry> get quarantine => List.unmodifiable(_quarantine);
+
+  /// True when an imported or restored transaction id is already known,
+  /// including one the user deleted afterwards.
+  bool knowsTransaction(String id) =>
+      _transactions.containsKey(id) ||
+      _tombstones.containsKey('transaction:$id');
   int get cursor => _cursor;
   static String newId() => const Uuid().v4();
 
@@ -266,36 +278,143 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _tombstones.clear();
     _cursor = 0;
     lastSyncAt = null;
+    _quarantine
+      ..clear()
+      ..addAll(await _readQuarantine());
     if (raw == null) return;
-    for (final item in (raw['transactions'] as List? ?? [])) {
-      final record = TransactionRecord.fromJson(
-        Map<String, dynamic>.from(item as Map),
-      );
+    // A damaged record is set aside instead of failing startup for the whole
+    // ledger. It stays in the snapshot until the quarantine copy is durable.
+    final damaged = <QuarantineEntry>[];
+    void load(String section, void Function(Map<String, dynamic>) apply) {
+      final items = raw[section];
+      if (items == null) return;
+      if (items is! List) {
+        damaged.add(
+          _damaged('local', section, const FormatException('Не список'), items),
+        );
+        return;
+      }
+      for (final item in items) {
+        try {
+          apply(Map<String, dynamic>.from(item as Map));
+        } catch (e) {
+          damaged.add(_damaged('local', section, e, item));
+        }
+      }
+    }
+
+    load('transactions', (json) {
+      final record = TransactionRecord.fromJson(json);
       _transactions[record.id] = record;
-    }
-    for (final item in (raw['categories'] as List? ?? [])) {
-      final record = CategoryRecord.fromJson(
-        Map<String, dynamic>.from(item as Map),
-      );
+    });
+    load('categories', (json) {
+      final record = CategoryRecord.fromJson(json);
       _categories[record.id] = record;
-    }
-    for (final item in (raw['budgets'] as List? ?? [])) {
-      final record = BudgetRecord.fromJson(
-        Map<String, dynamic>.from(item as Map),
-      );
+    });
+    load('budgets', (json) {
+      final record = BudgetRecord.fromJson(json);
       _budgets[record.id] = record;
+    });
+    load('dirty', (json) => _dirty[_key(_validChange(json))] = json);
+    load('tombstones', (json) => _tombstones[_key(_validChange(json))] = json);
+    final cursor = raw['cursor'];
+    // An unreadable cursor only costs a full pull, never local records.
+    _cursor = cursor is num && cursor >= 0 ? cursor.toInt() : 0;
+    final syncedAt = raw['lastSyncAt'];
+    lastSyncAt = syncedAt is String ? DateTime.tryParse(syncedAt) : null;
+    if (damaged.isEmpty) return;
+    try {
+      await _addQuarantine(damaged);
+    } catch (_) {
+      // Keep the snapshot untouched; the next load retries the quarantine.
+      return;
     }
-    for (final item in (raw['dirty'] as List? ?? [])) {
-      final change = Map<String, dynamic>.from(item as Map);
-      _dirty[_key(change)] = change;
-    }
-    for (final item in (raw['tombstones'] as List? ?? [])) {
-      final change = Map<String, dynamic>.from(item as Map);
-      _tombstones[_key(change)] = change;
-    }
-    _cursor = (raw['cursor'] as num?)?.toInt() ?? 0;
-    lastSyncAt = DateTime.tryParse(raw['lastSyncAt'] as String? ?? '');
+    try {
+      await _persist();
+    } catch (_) {}
+    error =
+        'Повреждённые записи отложены: ${damaged.length}. Подробности — в Настройках, раздел «Данные».';
   }
+
+  Map<String, dynamic> _validChange(Map<String, dynamic> change) {
+    final id = change['id'];
+    if (!const {
+          'transaction',
+          'category',
+          'budget',
+        }.contains(change['entity']) ||
+        id is! String ||
+        id.isEmpty ||
+        change['deleted'] is! bool ||
+        (change['deleted'] == false && change['payload'] is! Map)) {
+      throw const FormatException('Некорректное изменение синхронизации');
+    }
+    DateTime.parse(change['updatedAt'] as String);
+    return change;
+  }
+
+  QuarantineEntry _damaged(
+    String source,
+    String section,
+    Object error,
+    Object? raw,
+  ) => QuarantineEntry(
+    source: source,
+    section: section,
+    reason: describeRecordError(error),
+    detectedAt: DateTime.now().toUtc(),
+    raw: raw,
+  );
+
+  String get _quarantineKey => '$_scope#quarantine';
+
+  Future<List<QuarantineEntry>> _readQuarantine() async {
+    try {
+      final raw = await _storage!.read(_quarantineKey);
+      return [
+        for (final item in (raw?['items'] as List? ?? []))
+          QuarantineEntry.fromJson(Map<String, dynamic>.from(item as Map)),
+      ];
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<void> _addQuarantine(List<QuarantineEntry> entries) async {
+    String identity(QuarantineEntry entry) {
+      try {
+        return '${entry.source}|${entry.section}|${jsonEncode(entry.raw)}';
+      } catch (_) {
+        return '${entry.source}|${entry.section}|${entry.raw}';
+      }
+    }
+
+    final next = [..._quarantine];
+    final seen = {for (final entry in next) identity(entry)};
+    for (final entry in entries) {
+      if (seen.add(identity(entry))) next.add(entry);
+    }
+    await _storage!.write(_quarantineKey, {
+      'items': next.map((entry) => entry.toJson()).toList(),
+    });
+    _quarantine
+      ..clear()
+      ..addAll(next);
+  }
+
+  /// Report for the user to keep or repair by hand. Contains finance data only.
+  Map<String, dynamic> quarantineReport() => {
+    'format': 'balance-quarantine',
+    'version': 1,
+    'exportedAt': DateTime.now().toUtc().toIso8601String(),
+    'items': _quarantine.map((entry) => entry.toJson()).toList(),
+  };
+
+  Future<void> clearQuarantine() => _exclusive(() async {
+    await _storage!.write(_quarantineKey, {'items': <Object>[]});
+    _quarantine.clear();
+    _notify();
+  });
 
   Map<String, dynamic> _snapshot() => {
     'transactions': _transactions.values.map((e) => e.toJson()).toList(),
@@ -479,6 +598,208 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         await _edited();
       });
 
+  /// Lossless copy of the current account's records, including deletions.
+  /// Sync state (queue, cursor) is per device and deliberately not included.
+  Future<Map<String, dynamic>> exportBackup() => _exclusive(
+    () async => {
+      'format': backupFormat,
+      'version': backupVersion,
+      'exportedAt': DateTime.now().toUtc().toIso8601String(),
+      'data': {
+        'transactions': _transactions.values.map((e) => e.toJson()).toList(),
+        'categories': _categories.values.map((e) => e.toJson()).toList(),
+        'budgets': _budgets.values.map((e) => e.toJson()).toList(),
+        'tombstones': _tombstones.values.toList(),
+      },
+    },
+  );
+
+  /// Merges a backup by last-write-wins on updatedAt, keeping the backup's
+  /// timestamps: newer device records and later deletions win, and the server
+  /// resolves the queued changes with the same rule on the next sync.
+  Future<BackupRestoreResult> restoreBackup(Object? decoded) =>
+      _exclusive(() async {
+        final data = backupData(decoded);
+        final result = BackupRestoreResult();
+        List<Map<String, dynamic>> items(String section) {
+          final value = data[section];
+          if (value is! List) {
+            if (value != null) result.invalid++;
+            return const [];
+          }
+          return [
+            for (final item in value)
+              if (item is Map)
+                Map<String, dynamic>.from(item)
+              else
+                <String, dynamic>{},
+          ];
+        }
+
+        bool newer(String key, DateTime? local, DateTime incoming) {
+          final tombstone = _tombstones[key];
+          if (tombstone != null &&
+              !incoming.isAfter(
+                DateTime.parse(tombstone['updatedAt'] as String),
+              )) {
+            return false;
+          }
+          return local == null || incoming.isAfter(local);
+        }
+
+        void restore<T>(
+          String section,
+          String entity,
+          T Function(Map<String, dynamic>) parse,
+          String Function(T) id,
+          DateTime Function(T) updatedAt,
+          bool Function(T) duplicate,
+          Map<String, T> target,
+          Map<String, dynamic> Function(T) payload,
+        ) {
+          for (final json in items(section)) {
+            final T record;
+            try {
+              record = parse(json);
+            } catch (_) {
+              result.invalid++;
+              continue;
+            }
+            final key = '$entity:${id(record)}';
+            final local = target[id(record)];
+            if (!newer(
+                  key,
+                  local == null ? null : updatedAt(local),
+                  updatedAt(record),
+                ) ||
+                duplicate(record)) {
+              result.skipped++;
+              continue;
+            }
+            target[id(record)] = record;
+            _queueChange(
+              _change(entity, id(record), updatedAt(record), payload(record)),
+            );
+            local == null ? result.added++ : result.updated++;
+          }
+        }
+
+        restore<CategoryRecord>(
+          'categories',
+          'category',
+          (json) {
+            final record = CategoryRecord.fromJson(json);
+            if (record.name.trim().isEmpty) {
+              throw const FormatException('Пустое название');
+            }
+            return record;
+          },
+          (r) => r.id,
+          (r) => r.updatedAt,
+          (r) => _categories.values.any(
+            (c) =>
+                c.id != r.id &&
+                c.name == r.name &&
+                c.kindRawValue == r.kindRawValue,
+          ),
+          _categories,
+          (r) => r.payload(),
+        );
+        restore<BudgetRecord>(
+          'budgets',
+          'budget',
+          (json) {
+            final record = BudgetRecord.fromJson(json);
+            if (record.limitMinor <= 0) {
+              throw const FormatException('Лимит должен быть больше нуля');
+            }
+            return record;
+          },
+          (r) => r.id,
+          (r) => r.updatedAt,
+          (r) {
+            final month = r.monthStart.toLocal();
+            return _budgets.values.any(
+              (b) =>
+                  b.id != r.id &&
+                  b.categoryName == r.categoryName &&
+                  b.monthStart.toLocal().year == month.year &&
+                  b.monthStart.toLocal().month == month.month,
+            );
+          },
+          _budgets,
+          (r) => r.payload(),
+        );
+        restore<TransactionRecord>(
+          'transactions',
+          'transaction',
+          (json) {
+            final record = TransactionRecord.fromJson(json);
+            if (record.amountMinor <= 0) {
+              throw const FormatException('Сумма должна быть больше нуля');
+            }
+            return record;
+          },
+          (r) => r.id,
+          (r) => r.updatedAt,
+          (_) => false,
+          _transactions,
+          (r) => r.payload(),
+        );
+        for (final json in items('tombstones')) {
+          try {
+            final change = _validChange(json);
+            if (change['deleted'] != true) {
+              throw const FormatException('Not a deletion');
+            }
+            final entity = change['entity'] as String;
+            final id = change['id'] as String;
+            final at = DateTime.parse(change['updatedAt'] as String);
+            final target = switch (entity) {
+              'transaction' => _transactions,
+              'category' => _categories,
+              _ => _budgets,
+            };
+            final local = target[id];
+            final localAt = switch (local) {
+              TransactionRecord r => r.updatedAt,
+              CategoryRecord r => r.updatedAt,
+              BudgetRecord r => r.updatedAt,
+              _ => null,
+            };
+            if (localAt == null || !at.isAfter(localAt)) {
+              result.skipped++;
+              continue;
+            }
+            target.remove(id);
+            _queueChange(_change(entity, id, at, null));
+            result.deleted++;
+          } catch (_) {
+            result.invalid++;
+          }
+        }
+        if (result.changed > 0) await _edited();
+        return result;
+      });
+
+  /// Adds new transactions in one snapshot write. Already known ids, including
+  /// deleted ones, are skipped so a re-imported statement adds nothing twice.
+  Future<int> importTransactions(Iterable<TransactionRecord> records) =>
+      _exclusive(() async {
+        var added = 0;
+        for (final record in records) {
+          if (record.amountMinor <= 0 || knowsTransaction(record.id)) continue;
+          final saved = record.copyWith(updatedAt: _now());
+          _transactions[saved.id] = saved;
+          _queueChange(
+            _change('transaction', saved.id, saved.updatedAt, saved.payload()),
+          );
+          added++;
+        }
+        if (added > 0) await _edited();
+        return added;
+      });
+
   Future<void> setCurrency(String value) => _exclusive(() async {
     currency = value;
     await _preferences!.setString('currency', value);
@@ -646,6 +967,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     syncing = true;
     error = null;
     syncMessage = 'Синхронизация…';
+    _skippedFromServer = 0;
     _notify();
     final sent = Map<String, Map<String, dynamic>>.from(_dirty);
     try {
@@ -673,7 +995,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       await _persist();
       syncMessage =
           sessionPersistenceWarning ??
-          (_dirty.isEmpty
+          (_skippedFromServer > 0
+              ? 'Синхронизировано. Пропущено записей с ошибками: $_skippedFromServer — см. Настройки → Данные'
+              : _dirty.isEmpty
               ? 'Синхронизировано'
               : 'Есть изменения для следующей синхронизации');
     } catch (e) {
@@ -693,8 +1017,21 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     int cursor,
   ) async {
     try {
+      // A change the client cannot read is set aside so it does not block
+      // every later page. A full sync pulls it again after an app update.
+      final damaged = <QuarantineEntry>[];
       for (final change in changes) {
-        _merge(change);
+        try {
+          _merge(change);
+        } catch (e) {
+          damaged.add(
+            _damaged('server', change['entity'] as String, e, change),
+          );
+        }
+      }
+      if (damaged.isNotEmpty) {
+        await _addQuarantine(damaged);
+        _skippedFromServer += damaged.length;
       }
       _cursor = cursor;
       await _persist();

@@ -564,6 +564,7 @@ Future<bool> confirmDelete(
   String title, {
   String message =
       'Это действие будет синхронизировано с другими устройствами.',
+  String action = 'Удалить',
 }) async =>
     await showDialog<bool>(
       context: context,
@@ -577,7 +578,7 @@ Future<bool> confirmDelete(
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Удалить'),
+            child: Text(action),
           ),
         ],
       ),
