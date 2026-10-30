@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:quick_actions/quick_actions.dart';
@@ -83,6 +84,7 @@ class _BalanceShellState extends State<BalanceShell> {
   int months = 1;
   TransactionFilter listFilter = const TransactionFilter();
   final searchController = TextEditingController();
+  final searchFocus = FocusNode();
   DateTime budgetMonth = DateTime(DateTime.now().year, DateTime.now().month);
   static const titles = [
     'Обзор',
@@ -123,6 +125,7 @@ class _BalanceShellState extends State<BalanceShell> {
   @override
   void dispose() {
     searchController.dispose();
+    searchFocus.dispose();
     super.dispose();
   }
 
@@ -361,8 +364,51 @@ class _BalanceShellState extends State<BalanceShell> {
     note.dispose();
   }
 
+  /// ⌘ on Apple platforms, Ctrl elsewhere.
+  bool get _apple =>
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+  String get shortcutModifier => _apple ? '⌘' : 'Ctrl+';
+
+  SingleActivator _key(LogicalKeyboardKey key) =>
+      SingleActivator(key, control: !_apple, meta: _apple);
+
+  /// Dialogs are separate routes, so these do not fire over an open editor;
+  /// under the app lock the PIN pad holds focus and nothing here runs.
+  Map<ShortcutActivator, VoidCallback> shortcuts() {
+    void guarded(VoidCallback action) {
+      if (!(widget.lock?.locked ?? false)) action();
+    }
+
+    const digits = [
+      LogicalKeyboardKey.digit1,
+      LogicalKeyboardKey.digit2,
+      LogicalKeyboardKey.digit3,
+      LogicalKeyboardKey.digit4,
+      LogicalKeyboardKey.digit5,
+    ];
+    return {
+      _key(LogicalKeyboardKey.keyN): () => guarded(editTransaction),
+      _key(LogicalKeyboardKey.keyF): () => guarded(() {
+        setState(() => page = 1);
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => searchFocus.requestFocus(),
+        );
+      }),
+      for (var i = 0; i < digits.length; i++)
+        _key(digits[i]): () => guarded(() => setState(() => page = i)),
+      _key(LogicalKeyboardKey.keyL): () =>
+          guarded(() => widget.lock?.lockNow()),
+    };
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: shortcuts(),
+    child: Focus(autofocus: true, child: _scaffold(context)),
+  );
+
+  Widget _scaffold(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
     return Scaffold(
       appBar: AppBar(
@@ -422,7 +468,7 @@ class _BalanceShellState extends State<BalanceShell> {
               leading: Padding(
                 padding: const EdgeInsets.only(bottom: 28, top: 16),
                 child: FloatingActionButton(
-                  tooltip: 'Добавить операцию',
+                  tooltip: 'Добавить операцию (${shortcutModifier}N)',
                   onPressed: editTransaction,
                   child: const Icon(Icons.add),
                 ),
@@ -764,6 +810,7 @@ class _BalanceShellState extends State<BalanceShell> {
     return [
       TextField(
         controller: searchController,
+        focusNode: searchFocus,
         decoration: const InputDecoration(
           prefixIcon: Icon(Icons.search),
           hintText: 'Поиск по категории или заметке',
@@ -1571,6 +1618,43 @@ class _BalanceShellState extends State<BalanceShell> {
         ],
       ),
     ),
+    if (kIsWeb ||
+        defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Горячие клавиши'),
+            for (final (keys, action) in [
+              ('${shortcutModifier}N', 'Новая операция'),
+              ('${shortcutModifier}F', 'Поиск операций'),
+              ('${shortcutModifier}1 … ${shortcutModifier}5', 'Разделы'),
+              if (widget.lock?.enabled ?? false)
+                ('${shortcutModifier}L', 'Заблокировать'),
+              ('Esc', 'Закрыть окно или отменить'),
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 120,
+                      child: Text(
+                        keys,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Expanded(child: Text(action)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    ],
     if (widget.notifications != null) ...[
       const SizedBox(height: 20),
       Panel(

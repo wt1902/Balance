@@ -136,7 +136,7 @@ These checks do **not** prove actual Android OS wake-up, force-stop/reboot behav
 
 The web helper uses SDK `dart:js_interop` only. The audit compiled `scripts/probe_web_lock.dart` to JavaScript and ran it against Node 24's native `navigator.locks`: two separate owner instances serialized, ownership released/reacquired, duplicate acquire/release rejected, insecure origin rejected, unsupported API rejected. The existing three Android channel tests still pass, and targeted analyzer checks pass. This exercises native Web Locks Promise semantics, not a real browser two-tab IndexedDB/keychain scenario; that integration remains an explicit runtime check. The platform owner rebuilds the full release web bundle after this change.
 
-Desktop multiple independent app processes are not coordinated by this Web/Android helper. Standard desktop runners have one foreground AppStore; simultaneous desktop instances require a separately tested OS file-lock implementation before they can be claimed safe.
+Desktop (4.2): `RuntimeLock` takes an exclusive OS file lock (`balance.lock` next to the ledger, `RandomAccessFile.lock`) around each AppStore operation, so independent processes are serialized like Android engines and reload through `ledgerRevision`. A test holds the lock from a real second `dart` process and checks the app waits. The runners also keep one instance: Linux registers a unique `GApplication` (a second launch activates the first over D-Bus), Windows uses a named mutex and brings the existing window forward, macOS does this itself.
 
 ## Appearance update 4.1
 
@@ -170,3 +170,7 @@ Flutter-only, device-local, off by default; the permission is requested when a s
 ## Transaction list 4.2
 
 Flutter-only. Beyond the native search and all/income/expense filter: a filter sheet (period presets or a custom half-open range, inclusive amount bounds, categories by name), date and amount sorts, removable active-filter chips with a count, a «Найдено» line with income/expense totals, and per-day panels with day totals that exclude balance adjustments like period analytics does. Amount sorts show undated slices of 50; the list stays lazy either way.
+
+## Desktop 4.2
+
+Keyboard shortcuts (Ctrl on Linux/Windows/Web, ⌘ on macOS): N new transaction, F search, 1–5 pages, L lock now; listed in Settings on desktop and Web. They are bound on the shell, so they do not fire over an open dialog or under the app lock. The window title is «Баланс».

@@ -38,8 +38,8 @@ Future<void> expectFailure(
 
 Future<void> main() async {
   secureContext = true;
-  final first = BrowserRuntimeLock();
-  final second = BrowserRuntimeLock();
+  final first = PlatformRuntimeLock();
+  final second = PlatformRuntimeLock();
   await first.acquire();
   await expectFailure(first.acquire, 'already held');
   var acquired = false;
@@ -52,7 +52,7 @@ Future<void> main() async {
   await expectFailure(second.release, 'not held');
 
   secureContext = false;
-  await expectFailure(BrowserRuntimeLock().acquire, 'HTTPS');
+  await expectFailure(PlatformRuntimeLock().acquire, 'HTTPS');
   secureContext = true;
   final original = lockManager;
   defineProperty(
@@ -60,13 +60,13 @@ Future<void> main() async {
     'locks'.toJS,
     {'value': null, 'configurable': true}.jsify() as JSObject,
   );
-  await expectFailure(BrowserRuntimeLock().acquire, 'Web Locks API');
+  await expectFailure(PlatformRuntimeLock().acquire, 'Web Locks API');
   defineProperty(
     navigatorObject,
     'locks'.toJS,
     {'value': original, 'configurable': true}.jsify() as JSObject,
   );
-  final restored = BrowserRuntimeLock();
+  final restored = PlatformRuntimeLock();
   await restored.acquire();
   await restored.release();
   print('Web lock probe passed');

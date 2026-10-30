@@ -52,7 +52,7 @@ BalanceFlutter/
 │   │   ├── app_store.dart   # AppStore: состояние, CRUD, очередь изменений, сессии, sync
 │   │   ├── sync_api.dart    # SyncApi: HTTP-клиент /v1 API
 │   │   ├── storage*.dart    # Sembast (native) / IndexedDB (web) снапшоты
-│   │   ├── runtime_lock*.dart # межпроцессная/межвкладочная блокировка
+│   │   ├── runtime_lock*.dart # блокировка: Android, Web Locks, файл ОС на десктопе
 │   │   ├── background.dart  # фоновая синхронизация (WorkManager, Android)
 │   │   ├── launch_actions.dart # канал balance/launch: плитка, виджет Android
 │   │   ├── notifications.dart # уведомления: бюджет 80/100%, напоминание
