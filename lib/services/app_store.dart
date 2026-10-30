@@ -85,8 +85,24 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   Map<String, String>? _widgetSummary;
   int _skippedFromServer = 0;
 
+  /// Last `ledgerRevision` this engine wrote or loaded. Every storage write
+  /// first sets a new one, so an unchanged value means the data in memory and
+  /// the open database are current and need no reload.
+  String? _ledgerRevision;
+  String? _sessionCheckedRevision, _sessionCheckedServer;
+  DateTime? _latestChangeAt;
+  List<TransactionRecord>? _sortedTransactions;
+
+  /// Objects as last written, by ledger record key. Records are immutable and
+  /// replaced on change, so identity tells what a write must include.
+  final Map<String, Object> _persisted = {};
+  bool _persistFull = true;
+
+  /// Newest first; cached until the next notification or reload.
   List<TransactionRecord> get transactions =>
-      _transactions.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+      _sortedTransactions ??= List.unmodifiable(
+        _transactions.values.toList()..sort((a, b) => b.date.compareTo(a.date)),
+      );
   List<CategoryRecord> get categories =>
       _categories.values.toList()..sort((a, b) => a.name.compareTo(b.name));
   List<BudgetRecord> get budgets =>
@@ -131,6 +147,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _notify() {
+    _sortedTransactions = null;
     if (!_disposed) notifyListeners();
   }
 
@@ -178,13 +195,28 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _deviceId = _preferences!.getString('deviceId') ?? _deviceId;
     _loadTemplates();
     await _restoreSession();
-    await _loadScope();
+    final revision = _preferences!.getString('ledgerRevision');
+    if (revision == null || revision != _ledgerRevision) {
+      await _storage!.invalidate();
+      await _loadScope();
+    } else if (_scopeFor(session?.userId) != _scope) {
+      await _loadScope();
+    }
     _notify();
   }
 
   Future<void> _restoreSession() async {
-    session = null;
     final revision = _preferences!.getString('sessionRevision.$serverUrl');
+    // Every credential change sets a new revision; skip the secure read
+    // (Keychain/Keystore) when nothing changed since the last check.
+    if (revision != null &&
+        revision == _sessionCheckedRevision &&
+        serverUrl == _sessionCheckedServer) {
+      return;
+    }
+    _sessionCheckedRevision = revision;
+    _sessionCheckedServer = serverUrl;
+    session = null;
     if (_volatileServer == serverUrl &&
         _volatileRevision == revision &&
         _volatileSession != null) {
@@ -283,6 +315,10 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _loadScope() async {
     _scope = _scopeFor(session?.userId);
+    _ledgerRevision = _preferences?.getString('ledgerRevision');
+    _sortedTransactions = null;
+    _persisted.clear();
+    _persistFull = true;
     final raw = await _storage!.read(_scope);
     _transactions.clear();
     _categories.clear();
@@ -290,6 +326,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _dirty.clear();
     _tombstones.clear();
     _cursor = 0;
+    _latestChangeAt = null;
     lastSyncAt = null;
     _quarantine
       ..clear()
@@ -328,13 +365,22 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       final record = BudgetRecord.fromJson(json);
       _budgets[record.id] = record;
     });
-    load('dirty', (json) => _dirty[_key(_validChange(json))] = json);
+    load('dirty', (json) {
+      _dirty[_key(_validChange(json))] = json;
+      _noteChangeTime(json);
+    });
     load('tombstones', (json) => _tombstones[_key(_validChange(json))] = json);
     final cursor = raw['cursor'];
     // An unreadable cursor only costs a full pull, never local records.
     _cursor = cursor is num && cursor >= 0 ? cursor.toInt() : 0;
     final syncedAt = raw['lastSyncAt'];
     lastSyncAt = syncedAt is String ? DateTime.tryParse(syncedAt) : null;
+    // A legacy single snapshot is rewritten per record on the next write;
+    // damaged records are dropped by a full rewrite too.
+    if (raw[ledgerLayoutKey] == ledgerLayout && damaged.isEmpty) {
+      _persisted.addAll(_ledgerObjects());
+      _persistFull = false;
+    }
     if (damaged.isEmpty) return;
     try {
       await _addQuarantine(damaged);
@@ -407,7 +453,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     for (final entry in entries) {
       if (seen.add(identity(entry))) next.add(entry);
     }
-    await _storage!.write(_quarantineKey, {
+    await _write(_quarantineKey, {
       'items': next.map((entry) => entry.toJson()).toList(),
     });
     _quarantine
@@ -424,7 +470,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   };
 
   Future<void> clearQuarantine() => _exclusive(() async {
-    await _storage!.write(_quarantineKey, {'items': <Object>[]});
+    await _write(_quarantineKey, {'items': <Object>[]});
     _quarantine.clear();
     _notify();
   });
@@ -438,7 +484,73 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     'cursor': _cursor,
     'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
   };
-  Future<void> _persist() => _storage!.write(_scope, _snapshot());
+  Map<String, Object> _ledgerObjects() => {
+    for (final e in _transactions.entries) 't:${e.key}': e.value,
+    for (final e in _categories.entries) 'c:${e.key}': e.value,
+    for (final e in _budgets.entries) 'b:${e.key}': e.value,
+    for (final e in _dirty.entries) 'd:${e.key}': e.value,
+    for (final e in _tombstones.entries) 'x:${e.key}': e.value,
+  };
+
+  /// Writes only records that changed since the last write, with the cursor,
+  /// in one storage transaction.
+  Future<void> _persist() async {
+    final current = _ledgerObjects();
+    final full = _persistFull;
+    final upserts = <String, Map<String, dynamic>>{};
+    for (final entry in current.entries) {
+      if (!full && identical(_persisted[entry.key], entry.value)) continue;
+      upserts[entry.key] = switch (entry.value) {
+        final TransactionRecord r => r.toJson(),
+        final CategoryRecord r => r.toJson(),
+        final BudgetRecord r => r.toJson(),
+        final value => value as Map<String, dynamic>,
+      };
+    }
+    final delta = LedgerDelta(
+      upserts: upserts,
+      deletes: full
+          ? const []
+          : [
+              for (final key in _persisted.keys)
+                if (!current.containsKey(key)) key,
+            ],
+      meta: {
+        'cursor': _cursor,
+        'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
+      },
+      replace: full,
+    );
+    await _announceWrite();
+    await _storage!.writeLedger(_scope, delta);
+    _persisted
+      ..clear()
+      ..addAll(current);
+    _persistFull = false;
+  }
+
+  Future<void> _announceWrite() async {
+    final revision = newId();
+    await _preferences!.setString('ledgerRevision', revision);
+    _ledgerRevision = revision;
+  }
+
+  /// Every storage write announces a new revision first, so other engines
+  /// reload even if this process dies before the write lands.
+  Future<void> _write(String key, Map<String, dynamic> value) async {
+    await _announceWrite();
+    await _storage!.write(key, value);
+  }
+
+  /// A complete ledger for another or a new scope, stored per record.
+  Future<void> _writeSnapshot(
+    String scope,
+    Map<String, dynamic> snapshot,
+  ) async {
+    await _announceWrite();
+    await _storage!.writeLedger(scope, LedgerDelta.fromSnapshot(snapshot));
+  }
+
   String _key(Map<String, dynamic> change) =>
       '${change['entity']}:${change['id']}';
   Map<String, dynamic> _change(
@@ -456,16 +568,23 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   DateTime _now() {
     // Strictly advance local timestamps even for successive edits in one tick.
     var now = DateTime.now().toUtc();
-    for (final change in _dirty.values) {
-      final previous = DateTime.parse(change['updatedAt'] as String);
-      if (!now.isAfter(previous)) {
-        now = previous.add(const Duration(microseconds: 1));
-      }
+    final latest = _latestChangeAt;
+    if (latest != null && !now.isAfter(latest)) {
+      now = latest.add(const Duration(microseconds: 1));
     }
     return now;
   }
 
+  /// Tracks the newest queued timestamp, so [_now] needs no scan of the queue.
+  void _noteChangeTime(Map<String, dynamic> change) {
+    final at = DateTime.parse(change['updatedAt'] as String);
+    if (_latestChangeAt == null || at.isAfter(_latestChangeAt!)) {
+      _latestChangeAt = at;
+    }
+  }
+
   void _queueChange(Map<String, dynamic> change) {
+    _noteChangeTime(change);
     final key = _key(change);
     _dirty[key] = change;
     if (change['deleted'] == true) {
@@ -1036,7 +1155,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     await _deleteCredentials();
     if (unconfiguredGuest != null &&
         await _storage!.read(_scopeFor(null)) == null) {
-      await _storage!.write(_scopeFor(null), unconfiguredGuest);
+      await _writeSnapshot(_scopeFor(null), unconfiguredGuest);
     }
     await _loadScope();
     error = null;
@@ -1070,7 +1189,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     await _saveCredentials(response);
     await _loadScope();
     if (guest != null) {
-      await _storage!.write(_scope, guest);
+      await _writeSnapshot(_scope, guest);
       await _loadScope();
       _cursor = 0;
       // Imported rows may have been synced under another prior guest snapshot.

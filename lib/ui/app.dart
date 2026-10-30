@@ -735,35 +735,30 @@ class _BalanceShellState extends State<BalanceShell> {
           subtitle: 'Добавьте операцию или измените условия поиска.',
         )
       else
-        Panel(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Column(
-            children: [
-              for (int i = 0; i < items.length; i++) ...[
-                if (i == 0 ||
-                    !DateUtils.isSameDay(
-                      items[i - 1].date.toLocal(),
-                      items[i].date.toLocal(),
-                    ))
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        DateFormat(
-                          'd MMMM y',
-                          'ru',
-                        ).format(items[i].date.toLocal()),
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                  ),
-                transactionTile(items[i]),
-              ],
-            ],
+        // One lightweight widget per day: the page ListView builds only the
+        // days on screen, so tens of thousands of operations stay cheap.
+        for (final day in _byDay(items))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _DayPanel(items: day, tile: transactionTile),
           ),
-        ),
     ];
+  }
+
+  static List<List<TransactionRecord>> _byDay(List<TransactionRecord> items) {
+    final days = <List<TransactionRecord>>[];
+    for (final item in items) {
+      if (days.isEmpty ||
+          !DateUtils.isSameDay(
+            days.last.last.date.toLocal(),
+            item.date.toLocal(),
+          )) {
+        days.add([item]);
+      } else {
+        days.last.add(item);
+      }
+    }
+    return days;
   }
 
   Widget spending(DateTime start, DateTime end, {int? limit}) {
@@ -1748,4 +1743,29 @@ class _BalanceShellState extends State<BalanceShell> {
       await run(store.clearQuarantine);
     }
   }
+}
+
+class _DayPanel extends StatelessWidget {
+  const _DayPanel({required this.items, required this.tile});
+  final List<TransactionRecord> items;
+  final Widget Function(TransactionRecord) tile;
+  @override
+  Widget build(BuildContext context) => Panel(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              DateFormat('d MMMM y', 'ru').format(items.first.date.toLocal()),
+              style: Theme.of(context).textTheme.labelLarge,
+            ),
+          ),
+        ),
+        for (final item in items) tile(item),
+      ],
+    ),
+  );
 }

@@ -107,7 +107,7 @@ Additional safety/data checks from source review:
 - Server URLs are validated by the same transport rules before account changes; insecure HTTP is limited to loopback and the Android emulator address. Android network-security and Apple local-network ATS exceptions are configured; real-device connectivity remains a device check.
 - Transaction editor choices deduplicate imported category names to avoid duplicate dropdown-value assertions while retaining archived snapshot categories.
 - A native preexisting SwiftData/Room database is not automatically imported by the new app identity. Use the Go transfer route above; the native Watch ledger also requires the same server/account.
-- All scoped snapshots and their dirty outboxes are fully loaded into memory and rewritten as a complete snapshot on each edit/page. Large-ledger performance has not been measured.
+- Scoped ledgers are loaded into memory once and stored per record in Sembast (4.2): each edit or pull page writes only changed records with the cursor in one transaction. A shared `ledgerRevision` preference tells engines when to reload; see `VALIDATION.md` for the 1k/10k/50k benchmark.
 - Corrupt local records no longer fail initialization (4.2): each is set aside into a per-scope quarantine and startup continues; see Data tools 4.2.
 - Remote payload validation checks envelope shape; a pulled change that fails model decoding is quarantined (source `server`) and skipped, the page and cursor still commit, and the sync message reports the count (4.2). Envelope/protocol errors still abort the pull.
 - Nonpositive imported budget limits do not produce division by zero; local UI requires a positive replacement limit. Invalid server data can be repaired through the editor.
