@@ -166,3 +166,7 @@ Flutter-only, device-local, never synced: optional app lock with a 4–8 digit P
 ## Notifications 4.2
 
 Flutter-only, device-local, off by default; the permission is requested when a switch is turned on. Budget alerts (`flutter_local_notifications`, all platforms) fire once per budget, month and threshold (80%, 100%) after local edits and, on Android, after background sync; the text has percentages only, the Android visibility is private. Turning alerts on records current levels silently. The daily reminder (Android, iOS, macOS; Linux/Web have no scheduler, Windows no repeats) is scheduled inexactly and moves to the next day when something was entered today. Rules live in `lib/domain/notifications.dart` and use `FinanceMath.budgetUsed`. System UI the app opens itself (pickers, share sheet, permission and biometric prompts) runs inside `AppLock.whileExternal`, so it does not relock the app.
+
+## Transaction list 4.2
+
+Flutter-only. Beyond the native search and all/income/expense filter: a filter sheet (period presets or a custom half-open range, inclusive amount bounds, categories by name), date and amount sorts, removable active-filter chips with a count, a «Найдено» line with income/expense totals, and per-day panels with day totals that exclude balance adjustments like period analytics does. Amount sorts show undated slices of 50; the list stays lazy either way.

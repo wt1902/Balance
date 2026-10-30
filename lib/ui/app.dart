@@ -7,6 +7,7 @@ import 'package:quick_actions/quick_actions.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
 import '../domain/templates.dart';
+import '../domain/transaction_filter.dart';
 import 'app_theme.dart';
 import 'data_tools.dart';
 import '../services/app_lock.dart';
@@ -17,6 +18,7 @@ import 'design.dart';
 import 'editors.dart';
 import 'notifications_panel.dart';
 import 'privacy.dart';
+import 'transactions_page.dart';
 
 class BalanceApp extends StatelessWidget {
   const BalanceApp({
@@ -79,7 +81,8 @@ class _BalanceShellState extends State<BalanceShell> {
   AppStore get store => widget.store;
   int page = 0;
   int months = 1;
-  String query = '', filter = 'all';
+  TransactionFilter listFilter = const TransactionFilter();
+  final searchController = TextEditingController();
   DateTime budgetMonth = DateTime(DateTime.now().year, DateTime.now().month);
   static const titles = [
     'Обзор',
@@ -115,6 +118,12 @@ class _BalanceShellState extends State<BalanceShell> {
         );
       }
     }
+  }
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    super.dispose();
   }
 
   @override
@@ -733,28 +742,39 @@ class _BalanceShellState extends State<BalanceShell> {
     ),
     onTap: () => editTransaction(t),
   );
+  Future<void> editListFilter() async {
+    final result = await showModalBottomSheet<TransactionFilter>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => TransactionFilterSheet(
+        filter: listFilter,
+        categories: store.categories,
+        currency: store.currency,
+      ),
+    );
+    if (result != null) setState(() => listFilter = result);
+  }
+
   List<Widget> transactions() {
-    final items = store.transactions
-        .where(
-          (t) =>
-              (filter == 'all' || t.kindRawValue == filter) &&
-              (query.isEmpty ||
-                  '${t.categoryName} ${t.note}'.toLowerCase().contains(
-                    query.toLowerCase(),
-                  )),
-        )
-        .toList();
+    final f = listFilter;
+    final items = f.apply(store.transactions);
+    final totals = DayGroup.totals(items);
+    final filtered = f.activeCount > 0 || f.query.trim().isNotEmpty;
     return [
       TextField(
+        controller: searchController,
         decoration: const InputDecoration(
           prefixIcon: Icon(Icons.search),
           hintText: 'Поиск по категории или заметке',
         ),
-        onChanged: (s) => setState(() => query = s),
+        onChanged: (s) => setState(() => listFilter = f.copyWith(query: s)),
       ),
       const SizedBox(height: 16),
       Wrap(
         spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (final e in {
             'all': 'Все',
@@ -763,42 +783,130 @@ class _BalanceShellState extends State<BalanceShell> {
           }.entries)
             ChoiceChip(
               label: Text(e.value),
-              selected: filter == e.key,
-              onSelected: (_) => setState(() => filter = e.key),
+              selected: f.kind == e.key,
+              onSelected: (_) =>
+                  setState(() => listFilter = f.copyWith(kind: e.key)),
             ),
+          Badge(
+            isLabelVisible: f.activeCount > 0,
+            label: Text('${f.activeCount}'),
+            child: OutlinedButton.icon(
+              onPressed: editListFilter,
+              icon: const Icon(Icons.filter_list),
+              label: const Text('Фильтры'),
+            ),
+          ),
+          PopupMenuButton<TransactionSort>(
+            tooltip: 'Сортировка',
+            initialValue: f.sort,
+            onSelected: (v) => setState(() => listFilter = f.copyWith(sort: v)),
+            itemBuilder: (_) => [
+              for (final sort in TransactionSort.values)
+                PopupMenuItem(value: sort, child: Text(sort.title)),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.sort, size: 20),
+                  const SizedBox(width: 6),
+                  Text(f.sort.title),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
-      const SizedBox(height: 20),
+      if (f.activeCount > 0) ...[
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (f.hasPeriod)
+              InputChip(
+                avatar: const Icon(Icons.date_range, size: 18),
+                label: Text(periodTitle(f)),
+                onPressed: editListFilter,
+                onDeleted: () => setState(() => listFilter = f.withoutPeriod()),
+              ),
+            if (f.hasAmount)
+              InputChip(
+                avatar: const Icon(Icons.payments_outlined, size: 18),
+                label: Text(amountTitle(f, store.currency)),
+                onPressed: editListFilter,
+                onDeleted: () => setState(() => listFilter = f.withoutAmount()),
+              ),
+            if (f.categories.isNotEmpty)
+              InputChip(
+                avatar: const Icon(Icons.category_outlined, size: 18),
+                label: Text(
+                  f.categories.length == 1
+                      ? f.categories.single
+                      : 'Категорий: ${f.categories.length}',
+                ),
+                onPressed: editListFilter,
+                onDeleted: () =>
+                    setState(() => listFilter = f.copyWith(categories: {})),
+              ),
+          ],
+        ),
+      ],
+      const SizedBox(height: 16),
+      if (filtered && items.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'Найдено: ${items.length} · расходы '
+            '${money(totals.expensesMinor, store.currency)} · доходы '
+            '${money(totals.incomeMinor, store.currency)}',
+          ),
+        ),
       if (items.isEmpty)
-        const EmptyView(
-          title: 'Операций пока нет',
-          subtitle: 'Добавьте операцию или измените условия поиска.',
+        EmptyView(
+          title: store.transactions.isEmpty
+              ? 'Операций пока нет'
+              : 'Ничего не найдено',
+          subtitle: store.transactions.isEmpty
+              ? 'Добавьте операцию, чтобы она появилась здесь.'
+              : 'Измените поиск или фильтры.',
+          action: filtered
+              ? TextButton(
+                  onPressed: () => setState(() {
+                    // The search box must not keep text the list ignores.
+                    searchController.clear();
+                    listFilter = TransactionFilter(kind: f.kind, sort: f.sort);
+                  }),
+                  child: const Text('Сбросить фильтры'),
+                )
+              : null,
         )
-      else
-        // One lightweight widget per day: the page ListView builds only the
-        // days on screen, so tens of thousands of operations stay cheap.
-        for (final day in _byDay(items))
+      // One lightweight widget per day or slice: the page ListView builds
+      // only those on screen, so tens of thousands of operations stay cheap.
+      else if (f.sort.byDate)
+        for (final day in DayGroup.group(items))
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: _DayPanel(items: day, tile: transactionTile),
+            child: DayPanel(
+              group: day,
+              tile: transactionTile,
+              currency: store.currency,
+            ),
+          )
+      else
+        for (var i = 0; i < items.length; i += 50)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: PlainPanel(
+              items: items.sublist(
+                i,
+                i + 50 < items.length ? i + 50 : items.length,
+              ),
+              tile: transactionTile,
+            ),
           ),
     ];
-  }
-
-  static List<List<TransactionRecord>> _byDay(List<TransactionRecord> items) {
-    final days = <List<TransactionRecord>>[];
-    for (final item in items) {
-      if (days.isEmpty ||
-          !DateUtils.isSameDay(
-            days.last.last.date.toLocal(),
-            item.date.toLocal(),
-          )) {
-        days.add([item]);
-      } else {
-        days.last.add(item);
-      }
-    }
-    return days;
   }
 
   Widget spending(DateTime start, DateTime end, {int? limit}) {
@@ -1811,29 +1919,4 @@ class _BalanceShellState extends State<BalanceShell> {
       await run(store.clearQuarantine);
     }
   }
-}
-
-class _DayPanel extends StatelessWidget {
-  const _DayPanel({required this.items, required this.tile});
-  final List<TransactionRecord> items;
-  final Widget Function(TransactionRecord) tile;
-  @override
-  Widget build(BuildContext context) => Panel(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              DateFormat('d MMMM y', 'ru').format(items.first.date.toLocal()),
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
-          ),
-        ),
-        for (final item in items) tile(item),
-      ],
-    ),
-  );
 }

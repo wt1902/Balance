@@ -45,6 +45,7 @@ BalanceFlutter/
 │   │   ├── backup.dart      # формат JSON-копии, план восстановления, карантин
 │   │   ├── statement_import.dart # разбор выписок CSV/OFX и своего CSV
 │   │   ├── templates.dart   # шаблоны быстрого ввода и частые траты
+│   │   ├── transaction_filter.dart # фильтры, сортировка и дни списка операций
 │   │   ├── money_format.dart # money(): формат сумм для UI и виджета
 │   │   └── appearance.dart  # пресеты оформления (ColorPreset)
 │   ├── services/
