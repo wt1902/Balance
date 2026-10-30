@@ -35,7 +35,7 @@ BalanceFlutter/
 ├── VALIDATION.md          # что и как проверено, известные ограничения
 ├── docs/                  # скриншоты для README
 │   └── ecosystem/         # общий контракт экосистемы (sync, модель данных, безопасность)
-├── branding/              # аватар репозитория и баннер README: SVG, PNG, render.sh
+├── branding/              # иконка приложения, аватар и баннер README: SVG, PNG, render.sh
 ├── .github/workflows/flutter.yml
 ├── lib/
 │   ├── main.dart
@@ -179,10 +179,15 @@ bash scripts/build.sh web        # android | ios | macos | windows | linux
 
 ## Оформление репозитория
 
-`branding/avatar.svg` → `avatar.png` (аватар репозитория, 512×512),
-`branding/banner.svg` → `banner.png` (баннер README, 1280×640; использует
-`assets/app_icon.png` и скриншоты из `docs/`). После правки SVG или
-скриншотов перерисуй PNG: `bash branding/render.sh` (нужен `resvg`).
+`branding/icon.svg` → `assets/app_icon.png` (иконка приложения, 1024×1024:
+кошелёк в палитре «Лес» с карточками доходов и расходов),
+`branding/icon_foreground.svg` → передний слой adaptive icon Android,
+`branding/avatar.svg` → `avatar.png` (аватар репозитория, 512×512, та же
+картинка, что и иконка), `branding/banner.svg` → `banner.png` (баннер README,
+1280×640; использует `assets/app_icon.png` и скриншоты из `docs/`). После
+правки SVG или скриншотов запусти `bash branding/render.sh` (нужны `resvg` и
+Pillow). Скрипт перерисует PNG и через `tool/update_icons.py` разложит
+иконку по Android, iOS, macOS, Windows и Web.
 
 ## Документация
 

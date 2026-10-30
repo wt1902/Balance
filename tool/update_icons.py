@@ -1,9 +1,14 @@
-"""Resize the original Balance icon into platform assets (requires Pillow)."""
+"""Resize the Balance icon into platform assets (requires Pillow).
+
+Run through branding/render.sh, which first renders assets/app_icon.png and
+branding/icon_foreground.png from their SVG sources.
+"""
 import json
 from pathlib import Path
 from PIL import Image
 root = Path(__file__).resolve().parents[1]
 icon = Image.open(root / 'assets/app_icon.png').convert('RGB')
+foreground = Image.open(root / 'branding/icon_foreground.png').convert('RGBA')
 def save(path, size):
     icon.resize((size,size), Image.Resampling.LANCZOS).save(path)
 for target in ['ios','macos']:
@@ -14,6 +19,20 @@ for target in ['ios','macos']:
             save(folder/asset['filename'],size)
 for density,size in [('mdpi',48),('hdpi',72),('xhdpi',96),('xxhdpi',144),('xxxhdpi',192)]:
     save(root/f'android/app/src/main/res/mipmap-{density}/ic_launcher.png',size)
+    # Adaptive icon foreground is a 108dp layer: 2.25x the 48dp legacy icon.
+    foreground.resize((size*9//4,)*2, Image.Resampling.LANCZOS).save(
+        root/f'android/app/src/main/res/mipmap-{density}/ic_launcher_foreground.png')
+res = root/'android/app/src/main/res'
+(res/'mipmap-anydpi-v26').mkdir(exist_ok=True)
+(res/'mipmap-anydpi-v26/ic_launcher.xml').write_text(
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+    '    <background android:drawable="@color/ic_launcher_background"/>\n'
+    '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
+    '</adaptive-icon>\n')
+(res/'values/ic_launcher_background.xml').write_text(
+    '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
+    '    <color name="ic_launcher_background">#2B6556</color>\n</resources>\n')
 for name,size in [('Icon-192',192),('Icon-512',512),('Icon-maskable-192',192),('Icon-maskable-512',512)]:
     save(root/f'web/icons/{name}.png',size)
 save(root/'web/favicon.png',32)

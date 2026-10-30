@@ -1,71 +1,44 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="512" height="512">
+  <!-- Repository avatar: the same artwork as icon.svg (the app icon). -->
   <defs>
-    <radialGradient id="bg" cx="50%" cy="40%" r="75%">
-      <stop offset="0" stop-color="#2a2368"/>
-      <stop offset="1" stop-color="#0d0b26"/>
-    </radialGradient>
-    <linearGradient id="frame" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#6d68c9"/>
-      <stop offset="1" stop-color="#3a3488"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#3f7d6b"/>
+      <stop offset="1" stop-color="#1a4a3e"/>
     </linearGradient>
-    <linearGradient id="stand" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3b3580"/>
-      <stop offset="1" stop-color="#2b2660"/>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bdf7e3"/>
+      <stop offset="1" stop-color="#8fe6c9"/>
     </linearGradient>
-    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2fc7b0"/>
-      <stop offset="1" stop-color="#3f6fd8"/>
+    <linearGradient id="income" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#26b3a3"/>
+      <stop offset="1" stop-color="#00897b"/>
     </linearGradient>
-    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="expense" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ff8a5c"/>
-      <stop offset="1" stop-color="#e2475f"/>
+      <stop offset="1" stop-color="#f4511e"/>
     </linearGradient>
-    <radialGradient id="ball" cx="38%" cy="35%" r="70%">
-      <stop offset="0" stop-color="#ffb08f"/>
-      <stop offset="0.5" stop-color="#f2614f"/>
-      <stop offset="1" stop-color="#b7323f"/>
-    </radialGradient>
-    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feGaussianBlur stdDeviation="10"/>
-    </filter>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#05040f" flood-opacity="0.6"/>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#0b2620" flood-opacity="0.45"/>
     </filter>
   </defs>
 
-  <!-- background -->
-  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
 
-  <!-- desktop monitor -->
-  <path d="M214 380 h56 l10 44 h-76 z" fill="url(#stand)"/>
-  <rect x="166" y="420" width="152" height="18" rx="9" fill="url(#stand)"/>
-  <rect x="44" y="96" width="396" height="290" rx="34" fill="url(#frame)"/>
-  <rect x="62" y="114" width="360" height="254" rx="20" fill="#07061a"/>
-
-  <!-- soft glow behind the mark -->
-  <ellipse cx="226" cy="241" rx="70" ry="78" fill="#4c45c2" opacity="0.45" filter="url(#glow)"/>
-
-  <!-- balance mark: two loops and a ball, as in the app icon -->
-  <rect x="172" y="160" width="108" height="82" rx="41" fill="none" stroke="url(#teal)" stroke-width="24"/>
-  <rect x="172" y="240" width="108" height="82" rx="41" fill="none" stroke="url(#coral)" stroke-width="24"/>
-  <path d="M184 201 v36" stroke="url(#teal)" stroke-width="24" stroke-linecap="round"/>
-  <circle cx="226" cy="241" r="21" fill="url(#ball)"/>
-  <ellipse cx="220" cy="233" rx="7" ry="4.5" fill="#ffffff" opacity="0.35"/>
-
-  <!-- phone in front of the monitor -->
   <g filter="url(#shadow)">
-    <rect x="340" y="214" width="134" height="250" rx="28" fill="url(#frame)"/>
-    <rect x="352" y="226" width="110" height="226" rx="18" fill="#07061a"/>
+    <!-- cards behind the wallet; arrows match the app's income/expense icons -->
+    <g transform="rotate(-10 400 330)">
+      <rect x="236" y="176" width="320" height="300" rx="36" fill="url(#income)"/>
+      <path d="M454 236 L338 352 M338 262 V352 H428" fill="none" stroke="#ffffff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <g transform="rotate(10 624 330)">
+      <rect x="468" y="176" width="320" height="300" rx="36" fill="url(#expense)"/>
+      <path d="M570 352 L686 236 M596 236 H686 V326" fill="none" stroke="#ffffff" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <!-- wallet -->
+    <rect x="196" y="420" width="632" height="420" rx="72" fill="url(#body)"/>
+    <!-- clasp tab -->
+    <rect x="590" y="560" width="268" height="152" rx="76" fill="#116b57"/>
+    <circle cx="666" cy="636" r="30" fill="#bdf7e3"/>
   </g>
-  <!-- tiny overview: balance card and income/expense bars -->
-  <rect x="364" y="246" width="86" height="44" rx="10" fill="#4c45c2"/>
-  <rect x="374" y="258" width="40" height="7" rx="3.5" fill="#ffffff" opacity="0.55"/>
-  <rect x="374" y="272" width="58" height="9" rx="4.5" fill="#ffffff" opacity="0.9"/>
-  <rect x="364" y="304" width="86" height="12" rx="6" fill="#1b1840"/>
-  <rect x="364" y="304" width="64" height="12" rx="6" fill="url(#teal)"/>
-  <rect x="364" y="326" width="86" height="12" rx="6" fill="#1b1840"/>
-  <rect x="364" y="326" width="40" height="12" rx="6" fill="url(#coral)"/>
-  <rect x="364" y="348" width="86" height="12" rx="6" fill="#1b1840"/>
-  <rect x="364" y="348" width="52" height="12" rx="6" fill="url(#teal)"/>
-  <rect x="380" y="430" width="54" height="6" rx="3" fill="#ffffff" opacity="0.25"/>
 </svg>
