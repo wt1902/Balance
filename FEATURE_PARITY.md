@@ -31,7 +31,7 @@ Source audit of the Swift iOS/macOS/watchOS and Kotlin Android applications. Sta
 | Currency | `Balance/Balance/Utilities/CurrencyFormatting.swift`; Android settings/components | RUB default; EUR/USD/SEK; display-only setting, no conversion or per-record currency; locale-aware formatting | Implemented; fixed ru_RU locale and two decimals differ from native device-locale 0–2 digits |
 | Theme | `Balance/Balance/Shared/AppTheme.swift`; Android `ui/theme/Theme.kt` | system default, light, dark; persisted locally | Implemented in source; secure device settings round-trip not tested |
 | Settings details | iOS settings; Mac/Watch features; Android root | Category/server links, operation count, storage/privacy description, version; local preferences excluded from finance sync | Implemented links/categories/about/storage messaging; saved-operation count absent at review |
-| CSV export | `Balance/Balance/Views/Settings/CSVDocument.swift` | Apple iOS/Mac only; all transactions descending; `balance-transactions.csv`, UTF-8, LF, ISO8601 UTC; raw positive amount; header `Дата,Тип,Категория,Сумма,Заметка`; every value quoted and embedded quotes doubled; adjustment type `Корректировка`; disabled for empty data | CSV encoding tests pass; mobile share and desktop/web save paths implemented; OS share/save dialogs unverified |
+| CSV export | `Balance/Balance/Views/Settings/CSVDocument.swift` | Apple iOS/Mac only; all transactions descending; `balance-transactions.csv`, UTF-8, LF, ISO8601 UTC; raw positive amount; header `Дата,Тип,Категория,Сумма,Заметка`; every value quoted and embedded quotes doubled; adjustment type `Корректировка`; disabled for empty data | Flutter 4.2 keeps the five native columns first and appends `ID,Вид,Иконка,Эмодзи,Цвет,Изменено`, writes a UTF-8 BOM and disarms formula-like cells reversibly; the file round-trips through statement import. Share/save dialogs checked on Linux and Android 15 |
 | Local persistence | `Balance/Balance/Shared/BalanceModelContainer.swift`; Android `data/AppDatabase.kt` | Durable finance entities; Apple SwiftData, Android Room v1; Apple recovery falls back to in-memory if local creation fails | Implemented using transactional Sembast / IndexedDB snapshots; restart tests use memory adapter, not real disk |
 | Server account | `Balance/Balance/Shared/ServerSync.swift`; Android `sync/*` | URL save, login/register (registration password ≥8), logout, manual sync, full resync, busy/message/last-sync state; retain local finance records on logout/server change | Implemented; scoped account/server isolation tests pass; device secure-storage and registration integration pending |
 | Session security | Same; Android `sync/SecureSessionStore.kt` | Apple Keychain AfterFirstUnlockThisDeviceOnly; Android AES-GCM encrypted session with Android Keystore; tokens never finance payload | Implemented through flutter_secure_storage with session-only fallback warning; physical-device secure storage unverified |
@@ -58,7 +58,7 @@ Source audit of the Swift iOS/macOS/watchOS and Kotlin Android applications. Sta
 12. **Emoji:** iOS limits input to one grapheme; Mac/Watch take first Swift Character on save. Android accepts an arbitrary string.
 13. **Notes:** iOS/Android transaction editors trim notes, Mac/Watch do not. Adjustment defaults: iOS trims; Android uses ifBlank without trimming a nonblank note; Mac/Watch use isEmpty.
 14. **Unknown kind:** Apple getter defaults to expense. Android totalBalance subtracts unknown kind but summary/spending exclude it because they test literal `expense`.
-15. **CSV is lossy:** no UUID, kind for adjustment, flag, timestamps, category design, custom-category definitions or budgets; an expense adjustment exports positive amount with no recoverable sign. It is not a complete migration format. Formula-like notes are quoted but not neutralized by native export.
+15. **CSV is lossy (native):** no UUID, kind for adjustment, flag, timestamps, category design, custom-category definitions or budgets; an expense adjustment exports positive amount with no recoverable sign. Formula-like notes are quoted but not neutralized by native export. Flutter 4.2 makes its transaction CSV lossless with appended columns (see Data tools 4.2); categories and budgets are only in the JSON backup.
 16. **Sync sizes:** Apple rejects individual payload >256 KiB and splits full bodies >1.5 MB. Android splits changes arrays >1.5 MB, without the Apple single-payload guard.
 17. **Server URL:** Apple HTTP allows localhost/127.0.0.1/::1; Android localhost/127.0.0.1/10.0.2.2. Android rejects userinfo/query/fragment; Apple has no explicit equivalent rejection.
 18. **Deletion journal:** Apple UserDefaults journal quarantines corrupt data and validates UUID/entity; Android Room journal is transactional with local deletion. A successful push alone must not discard tombstones.
@@ -107,11 +107,11 @@ Additional safety/data checks from source review:
 - Server URLs are validated by the same transport rules before account changes; insecure HTTP is limited to loopback and the Android emulator address. Android network-security and Apple local-network ATS exceptions are configured; real-device connectivity remains a device check.
 - Transaction editor choices deduplicate imported category names to avoid duplicate dropdown-value assertions while retaining archived snapshot categories.
 - A native preexisting SwiftData/Room database is not automatically imported by the new app identity. Use the Go transfer route above; the native Watch ledger also requires the same server/account.
-- All scoped snapshots and their dirty outboxes are fully loaded into memory and rewritten as a complete snapshot on each edit/page. Large-ledger performance has not been measured.
-- Corrupt local records can currently fail initialization; the startup error view offers retry without deleting data. A quarantined backup/recovery workflow is not implemented.
-- Remote payload validation checks envelope shape but model decoding can still reject malformed fields and block a pull page. This preserves the cursor but needs diagnostics/recovery testing.
+- Scoped ledgers are loaded into memory once and stored per record in Sembast (4.2): each edit or pull page writes only changed records with the cursor in one transaction. A shared `ledgerRevision` preference tells engines when to reload; see `VALIDATION.md` for the 1k/10k/50k benchmark.
+- Corrupt local records no longer fail initialization (4.2): each is set aside into a per-scope quarantine and startup continues; see Data tools 4.2.
+- Remote payload validation checks envelope shape; a pulled change that fails model decoding is quarantined (source `server`) and skipped, the page and cursor still commit, and the sync message reports the count (4.2). Envelope/protocol errors still abort the pull.
 - Nonpositive imported budget limits do not produce division by zero; local UI requires a positive replacement limit. Invalid server data can be repaired through the editor.
-- CSV retains the native lossy adjustment-sign behavior and does not neutralize formula-like text; treat it as an export report, not a restore format.
+- Flutter CSV (4.2) carries every transaction field (id, kind of an adjustment, category design, `updatedAt`) and prefixes formula-like cells (`= + - @`, tab, CR, apostrophe) with an apostrophe that its own importer removes. It still holds transactions only; the JSON backup also restores categories, budgets and deletions.
 
 ## Android background synchronization verification
 
@@ -136,8 +136,45 @@ These checks do **not** prove actual Android OS wake-up, force-stop/reboot behav
 
 The web helper uses SDK `dart:js_interop` only. The audit compiled `scripts/probe_web_lock.dart` to JavaScript and ran it against Node 24's native `navigator.locks`: two separate owner instances serialized, ownership released/reacquired, duplicate acquire/release rejected, insecure origin rejected, unsupported API rejected. The existing three Android channel tests still pass, and targeted analyzer checks pass. This exercises native Web Locks Promise semantics, not a real browser two-tab IndexedDB/keychain scenario; that integration remains an explicit runtime check. The platform owner rebuilds the full release web bundle after this change.
 
-Desktop multiple independent app processes are not coordinated by this Web/Android helper. Standard desktop runners have one foreground AppStore; simultaneous desktop instances require a separately tested OS file-lock implementation before they can be claimed safe.
+Desktop (4.2): `RuntimeLock` takes an exclusive OS file lock (`balance.lock` next to the ledger, `RandomAccessFile.lock`) around each AppStore operation, so independent processes are serialized like Android engines and reload through `ledgerRevision`. A test holds the lock from a real second `dart` process and checks the app waits. The runners also keep one instance: Linux registers a unique `GApplication` (a second launch activates the first over D-Bus), Windows uses a named mutex and brings the existing window forward, macOS does this itself.
 
 ## Appearance update 4.1
 
 Flutter supports system/light/dark mode plus five persisted presets (forest, indigo, ocean, rose, OLED). Selecting OLED initially enables dark mode; system mode subsequently follows OS brightness. Pure-black surfaces are checked both as theme colors and actual rendered pixels. Total Flutter tests: 62 passing. The native Watch client retains its existing appearance controls.
+
+## Data tools 4.2
+
+Flutter-only additions; the wire protocol is unchanged and there is no native equivalent.
+
+- JSON backup/restore (`balance-backup`, version 1): lossless (ids, `amountMinor`, `updatedAt`, adjustment flag, category design, custom categories, budgets, tombstones); queue and cursor are per-device and excluded. Restore merges by last-write-wins on `updatedAt`, queues restored records for sync, and rejects a newer format version.
+- Local quarantine of damaged records and failed pulled changes, with a JSON report and clear action in Settings → «Данные».
+- Bank statement import: CSV (auto delimiter and encoding, Т-Банк preset, column mapping) and OFX 1.x/2.x, with stable UUIDv5 ids so re-import adds nothing. Balance's own CSV export is recognized by its header and imported with its original ids, adjustment flags and category design.
+- Restore preview: a dry run lists what each backup record would do (add, update, delete, or skip with a reason) and only the selected records are restored.
+
+## Quick entry 4.2
+
+Flutter-only, no wire or model change; templates are device preferences (`quickTemplates`) like theme and currency.
+
+- Repeat and save-as-template from a transaction's menu (not for balance adjustments); «Быстрый ввод» chips show saved templates and up to three presets repeated at least twice in the last 90 days.
+- App icon shortcuts «Расход»/«Доход» via `quick_actions` (Android, iOS). Android also has a Quick Settings tile and a home-screen widget; both open the editor through the `balance/launch` method channel (`initialAction`, `action`, `updateWidgets`).
+- The widget reads preformatted `flutter.widget.*` strings that AppStore writes after every operation when they change; background sync updates them too, and the widget refreshes on its 30-minute schedule. No iOS widget yet.
+
+## Privacy 4.2
+
+Flutter-only, device-local, never synced: optional app lock with a 4–8 digit PIN (salted PBKDF2-HMAC-SHA256 in secure storage, throttled after five wrong attempts) and biometrics via `local_auth` (Android, iOS, macOS, Windows Hello; not Linux or Web). The lock shows at start and after a chosen time in the background; the interface stays offstage, out of the accessibility tree, while locked. «Скрывать в недавних приложениях» covers the app-switcher snapshot (Android 13+ `setRecentsScreenshotEnabled`, `FLAG_SECURE` below; a Flutter cover on iOS). Android's MainActivity is now a `FlutterFragmentActivity` with an AppCompat launch theme, as `local_auth` requires.
+
+## Notifications 4.2
+
+Flutter-only, device-local, off by default; the permission is requested when a switch is turned on. Budget alerts (`flutter_local_notifications`, all platforms) fire once per budget, month and threshold (80%, 100%) after local edits and, on Android, after background sync; the text has percentages only, the Android visibility is private. Turning alerts on records current levels silently. The daily reminder (Android, iOS, macOS; Linux/Web have no scheduler, Windows no repeats) is scheduled inexactly and moves to the next day when something was entered today. Rules live in `lib/domain/notifications.dart` and use `FinanceMath.budgetUsed`. System UI the app opens itself (pickers, share sheet, permission and biometric prompts) runs inside `AppLock.whileExternal`, so it does not relock the app.
+
+## Transaction list 4.2
+
+Flutter-only. Beyond the native search and all/income/expense filter: a filter sheet (period presets or a custom half-open range, inclusive amount bounds, categories by name), date and amount sorts, removable active-filter chips with a count, a «Найдено» line with income/expense totals, and per-day panels with day totals that exclude balance adjustments like period analytics does. Amount sorts show undated slices of 50; the list stays lazy either way.
+
+## Analytics 4.2
+
+Flutter-only, computed in `lib/domain/analytics.dart` with the shared rules (adjustments excluded, half-open local intervals, categories by name). Beyond the native 1/3/12-month selector: a calendar year with a year picker and a custom date range. Comparison with the previous period of the same length; while a period is ongoing both sides cover the same elapsed days (the previous side is clipped to its own end). Current-month forecast = spending to date / elapsed days × days in month + expenses already dated later this month; a budget run-out day uses the pace up to today and all spending of the month, shown on analytics (all budgets of the month) and on each budget card. Year report: monthly averages over started months, top expense and income months. One-category trend: 12 monthly expense totals through the period's last month. Trend buckets: days up to 45 days, Monday weeks up to 130, months beyond. Native clients have none of these.
+
+## Desktop 4.2
+
+Keyboard shortcuts (Ctrl on Linux/Windows/Web, ⌘ on macOS): N new transaction, F search, 1–5 pages, L lock now; listed in Settings on desktop and Web. They are bound on the shell, so they do not fire over an open dialog or under the app lock. The window title is «Баланс».

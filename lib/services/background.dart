@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:workmanager/workmanager.dart';
 
 import 'app_store.dart';
+import 'notifications.dart';
 
 const _periodicSyncName = 'balance-periodic-sync';
 const _syncTask = 'balance.finance.sync';
@@ -21,6 +22,13 @@ void balanceBackgroundDispatcher() {
       await store.initialize();
       await store.sync();
       success = true;
+      // Changes pulled from other devices can cross a budget threshold.
+      final notifications = Notifications();
+      await notifications.initialize();
+      await notifications.ledgerChanged(
+        budgets: store.budgets,
+        transactions: store.transactions,
+      );
     } catch (_) {
       // WorkManager retries with backoff; details/tokens are never logged.
       success = false;

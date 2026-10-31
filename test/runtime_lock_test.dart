@@ -35,8 +35,8 @@ void main() {
     await expectLater(RuntimeLock().acquire(), throwsStateError);
   });
 
-  test('non-Android platforms never invoke the native lock channel', () async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+  test('iOS never invokes the native lock channel', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     messenger.setMockMethodCallHandler(
       channel,
       (_) async => fail('Unexpected native channel call'),

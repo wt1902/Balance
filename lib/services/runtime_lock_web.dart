@@ -13,7 +13,7 @@ extension type _LockManager(JSObject _) implements JSObject {
 
 /// Holds the origin-wide Web Lock until release, including IndexedDB commits
 /// and rotated refresh-token persistence. Browser teardown releases the lock.
-class BrowserRuntimeLock {
+class PlatformRuntimeLock {
   bool _waiting = false;
   Completer<JSAny?>? _release;
   Future<JSAny?>? _request;

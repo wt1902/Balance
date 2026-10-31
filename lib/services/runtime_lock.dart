@@ -3,20 +3,22 @@ import 'package:flutter/services.dart';
 
 import 'runtime_lock_stub.dart'
     if (dart.library.js_interop) 'runtime_lock_web.dart'
-    as browser;
+    if (dart.library.io) 'runtime_lock_io.dart'
+    as platform;
 
-/// Native Android lock shared by the UI engine and WorkManager headless engines.
-/// Callers must hold it over reloading preferences/session, ledger IO and sync.
+/// One ledger operation at a time across everything that opens the ledger:
+/// the native Android lock (UI and WorkManager engines), Web Locks across
+/// tabs, and an OS file lock across desktop processes. Callers must hold it
+/// over reloading preferences/session, ledger IO and sync.
 class RuntimeLock {
   static const _channel = MethodChannel('balance/runtime');
-  final _browserLock = browser.BrowserRuntimeLock();
+  final _platformLock = platform.PlatformRuntimeLock();
   String? _token;
   bool get _android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   Future<void> acquire() async {
-    if (kIsWeb) return _browserLock.acquire();
-    if (!_android) return;
+    if (!_android) return _platformLock.acquire();
     if (_token != null) throw StateError('Ledger lock is already held');
     final token = await _channel.invokeMethod<String>('acquireLock');
     if (token == null || token.isEmpty) {
@@ -26,8 +28,7 @@ class RuntimeLock {
   }
 
   Future<void> release() async {
-    if (kIsWeb) return _browserLock.release();
-    if (!_android) return;
+    if (!_android) return _platformLock.release();
     final token = _token;
     if (token == null) throw StateError('Ledger lock is not held');
     await _channel.invokeMethod<void>('releaseLock', {'token': token});

@@ -7,6 +7,14 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+// G_APPLICATION_DEFAULT_FLAGS appeared in GLib 2.74; release builds target
+// Ubuntu 22.04 (GLib 2.72).
+#if GLIB_CHECK_VERSION(2, 74, 0)
+#define BALANCE_APPLICATION_FLAGS G_APPLICATION_DEFAULT_FLAGS
+#else
+#define BALANCE_APPLICATION_FLAGS G_APPLICATION_FLAGS_NONE
+#endif
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -22,6 +30,13 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+  // A second launch activates this primary instance over D-Bus: raise the
+  // existing window instead of opening another one on the same ledger.
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (windows != nullptr) {
+    gtk_window_present(GTK_WINDOW(windows->data));
+    return;
+  }
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -45,11 +60,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "balance");
+    gtk_header_bar_set_title(header_bar, "Баланс");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "balance");
+    gtk_window_set_title(window, "Баланс");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -144,5 +159,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     BALANCE_APPLICATION_FLAGS, nullptr));
 }

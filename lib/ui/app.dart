@@ -1,20 +1,39 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
-import 'package:file_selector/file_selector.dart';
-import 'package:share_plus/share_plus.dart';
+import 'package:quick_actions/quick_actions.dart';
+import '../domain/analytics.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
+import '../domain/templates.dart';
+import '../domain/transaction_filter.dart';
 import 'app_theme.dart';
+import 'data_tools.dart';
+import '../services/app_lock.dart';
 import '../services/app_store.dart';
+import '../services/launch_actions.dart';
+import '../services/notifications.dart';
 import 'design.dart';
 import 'editors.dart';
+import 'notifications_panel.dart';
+import 'privacy.dart';
+import 'transactions_page.dart';
 
 class BalanceApp extends StatelessWidget {
-  const BalanceApp({super.key, required this.store});
+  const BalanceApp({
+    super.key,
+    required this.store,
+    this.lock,
+    this.notifications,
+  });
   final AppStore store;
+  final Notifications? notifications;
+
+  /// App lock and privacy cover; absent in tests that do not need it.
+  final AppLock? lock;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
@@ -37,16 +56,25 @@ class BalanceApp extends StatelessWidget {
           : store.theme == 'light'
           ? ThemeMode.light
           : ThemeMode.system,
+      builder: (context, child) =>
+          PrivacyGate(lock: lock, child: child ?? const SizedBox.shrink()),
       home: store.ready
-          ? BalanceShell(store: store)
+          ? BalanceShell(store: store, lock: lock, notifications: notifications)
           : const Scaffold(body: Center(child: CircularProgressIndicator())),
     ),
   );
 }
 
 class BalanceShell extends StatefulWidget {
-  const BalanceShell({super.key, required this.store});
+  const BalanceShell({
+    super.key,
+    required this.store,
+    this.lock,
+    this.notifications,
+  });
   final AppStore store;
+  final AppLock? lock;
+  final Notifications? notifications;
   @override
   State<BalanceShell> createState() => _BalanceShellState();
 }
@@ -54,8 +82,15 @@ class BalanceShell extends StatefulWidget {
 class _BalanceShellState extends State<BalanceShell> {
   AppStore get store => widget.store;
   int page = 0;
-  int months = 1;
-  String query = '', filter = 'all';
+
+  /// `1`, `3`, `12` months, `year` or `custom`.
+  String analyticsMode = '1';
+  int reportYear = DateTime.now().year;
+  AnalyticsPeriod? customPeriod;
+  String? trendCategory;
+  TransactionFilter listFilter = const TransactionFilter();
+  final searchController = TextEditingController();
+  final searchFocus = FocusNode();
   DateTime budgetMonth = DateTime(DateTime.now().year, DateTime.now().month);
   static const titles = [
     'Обзор',
@@ -93,12 +128,147 @@ class _BalanceShellState extends State<BalanceShell> {
     }
   }
 
-  Future<void> editTransaction([TransactionRecord? value]) async {
+  @override
+  void dispose() {
+    searchController.dispose();
+    searchFocus.dispose();
+    super.dispose();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    LaunchActions.listen(quickAdd);
+    widget.notifications?.onTap = openNotification;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final action = await LaunchActions.initialAction();
+      if (action != null && mounted) await quickAdd(action);
+      final payload = await widget.notifications?.launchPayload();
+      if (payload != null && mounted) await openNotification(payload);
+    });
+    _setupShortcuts();
+  }
+
+  /// App icon shortcuts («Расход», «Доход») on Android and iOS.
+  Future<void> _setupShortcuts() async {
+    if (kIsWeb ||
+        !(defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.iOS)) {
+      return;
+    }
+    try {
+      const actions = QuickActions();
+      await actions.initialize((type) {
+        if (mounted) quickAdd(type);
+      });
+      await actions.setShortcutItems(const [
+        ShortcutItem(type: 'expense', localizedTitle: 'Расход'),
+        ShortcutItem(type: 'income', localizedTitle: 'Доход'),
+      ]);
+    } catch (_) {
+      // Shortcuts are optional; the plugin is absent in tests.
+    }
+  }
+
+  /// A tapped notification: the reminder opens a new expense, a budget alert
+  /// the budgets page.
+  Future<void> openNotification(String payload) async {
+    if (!mounted) return;
+    if (payload == 'reminder') {
+      await quickAdd('expense');
+    } else if (payload == 'budget') {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      setState(() {
+        page = 3;
+        budgetMonth = DateTime(DateTime.now().year, DateTime.now().month);
+      });
+    }
+  }
+
+  /// Entry from a shortcut, the Quick Settings tile or the home widget.
+  Future<void> quickAdd(String action) async {
+    if (!mounted || (action != 'expense' && action != 'income')) return;
+    Navigator.of(context).popUntil((route) => route.isFirst);
+    await editTransaction(
+      null,
+      TransactionTemplate.blank(TransactionKind.parse(action)),
+    );
+  }
+
+  Future<void> editTransaction([
+    TransactionRecord? value,
+    TransactionTemplate? draft,
+  ]) async {
     final result = await editDialog<TransactionRecord>(
       context,
-      TransactionEditor(existing: value, categories: store.categories),
+      TransactionEditor(
+        existing: value,
+        draft: draft,
+        categories: store.categories,
+      ),
     );
     if (result != null) await run(() => store.saveTransaction(result));
+  }
+
+  Widget quickEntry() {
+    final saved = store.templates;
+    final known = {for (final t in saved) t.signature};
+    final frequent = TransactionTemplate.frequent(
+      store.transactions,
+      DateTime.now(),
+    ).where((t) => !known.contains(t.signature));
+    if (saved.isEmpty && frequent.isEmpty) return const SizedBox.shrink();
+    Widget chip(TransactionTemplate t, {required bool isSaved}) {
+      final amount = t.amountMinor > 0
+          ? ' · ${money(t.amountMinor, store.currency)}'
+          : '';
+      // No chip tooltip: its long-press recognizer would swallow deletion.
+      return Semantics(
+        hint: isSaved
+            ? 'Шаблон. Удерживайте, чтобы удалить'
+            : 'Часто повторяется',
+        child: GestureDetector(
+          onLongPress: isSaved ? () => removeTemplate(t) : null,
+          onSecondaryTap: isSaved ? () => removeTemplate(t) : null,
+          child: ActionChip(
+            avatar: CategoryAvatar(
+              icon: t.categoryIcon,
+              emoji: t.categoryEmoji,
+              color: t.categoryColorName,
+              size: 24,
+            ),
+            label: Text('${t.title}$amount', overflow: TextOverflow.ellipsis),
+            onPressed: () => editTransaction(null, t),
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 28),
+        sectionTitle('Быстрый ввод'),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final t in saved) chip(t, isSaved: true),
+            for (final t in frequent) chip(t, isSaved: false),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> removeTemplate(TransactionTemplate t) async {
+    if (await confirmDelete(
+      context,
+      'Удалить шаблон «${t.title}»?',
+      message: 'Операции не изменятся, удалится только шаблон.',
+    )) {
+      await run(() => store.deleteTemplate(t.id));
+    }
   }
 
   Future<void> editCategory([CategoryRecord? value]) async {
@@ -200,8 +370,51 @@ class _BalanceShellState extends State<BalanceShell> {
     note.dispose();
   }
 
+  /// ⌘ on Apple platforms, Ctrl elsewhere.
+  bool get _apple =>
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.iOS;
+  String get shortcutModifier => _apple ? '⌘' : 'Ctrl+';
+
+  SingleActivator _key(LogicalKeyboardKey key) =>
+      SingleActivator(key, control: !_apple, meta: _apple);
+
+  /// Dialogs are separate routes, so these do not fire over an open editor;
+  /// under the app lock the PIN pad holds focus and nothing here runs.
+  Map<ShortcutActivator, VoidCallback> shortcuts() {
+    void guarded(VoidCallback action) {
+      if (!(widget.lock?.locked ?? false)) action();
+    }
+
+    const digits = [
+      LogicalKeyboardKey.digit1,
+      LogicalKeyboardKey.digit2,
+      LogicalKeyboardKey.digit3,
+      LogicalKeyboardKey.digit4,
+      LogicalKeyboardKey.digit5,
+    ];
+    return {
+      _key(LogicalKeyboardKey.keyN): () => guarded(editTransaction),
+      _key(LogicalKeyboardKey.keyF): () => guarded(() {
+        setState(() => page = 1);
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => searchFocus.requestFocus(),
+        );
+      }),
+      for (var i = 0; i < digits.length; i++)
+        _key(digits[i]): () => guarded(() => setState(() => page = i)),
+      _key(LogicalKeyboardKey.keyL): () =>
+          guarded(() => widget.lock?.lockNow()),
+    };
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => CallbackShortcuts(
+    bindings: shortcuts(),
+    child: Focus(autofocus: true, child: _scaffold(context)),
+  );
+
+  Widget _scaffold(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
     return Scaffold(
       appBar: AppBar(
@@ -261,7 +474,7 @@ class _BalanceShellState extends State<BalanceShell> {
               leading: Padding(
                 padding: const EdgeInsets.only(bottom: 28, top: 16),
                 child: FloatingActionButton(
-                  tooltip: 'Добавить операцию',
+                  tooltip: 'Добавить операцию (${shortcutModifier}N)',
                   onPressed: editTransaction,
                   child: const Icon(Icons.add),
                 ),
@@ -469,6 +682,7 @@ class _BalanceShellState extends State<BalanceShell> {
           ],
         ),
       ),
+      quickEntry(),
       const SizedBox(height: 20),
       metricRow([
         Metric(
@@ -547,41 +761,73 @@ class _BalanceShellState extends State<BalanceShell> {
           onSelected: (v) async {
             if (v == 'edit') {
               await editTransaction(t);
+            } else if (v == 'repeat') {
+              await editTransaction(
+                null,
+                TransactionTemplate.fromTransaction('repeat', t),
+              );
+            } else if (v == 'template') {
+              await run(
+                () => store.saveTemplate(
+                  TransactionTemplate.fromTransaction(AppStore.newId(), t),
+                ),
+                success: 'Шаблон сохранён в «Быстрый ввод»',
+              );
             } else if (await confirmDelete(context, 'Удалить операцию?')) {
               await run(() => store.deleteTransaction(t.id));
             }
           },
-          itemBuilder: (_) => const [
-            PopupMenuItem(value: 'edit', child: Text('Изменить')),
-            PopupMenuItem(value: 'delete', child: Text('Удалить')),
+          itemBuilder: (_) => [
+            const PopupMenuItem(value: 'edit', child: Text('Изменить')),
+            // A balance adjustment is not spending to repeat or reuse.
+            if (!t.isBalanceAdjustment) ...const [
+              PopupMenuItem(value: 'repeat', child: Text('Повторить')),
+              PopupMenuItem(
+                value: 'template',
+                child: Text('Сохранить как шаблон'),
+              ),
+            ],
+            const PopupMenuItem(value: 'delete', child: Text('Удалить')),
           ],
         ),
       ],
     ),
     onTap: () => editTransaction(t),
   );
+  Future<void> editListFilter() async {
+    final result = await showModalBottomSheet<TransactionFilter>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => TransactionFilterSheet(
+        filter: listFilter,
+        categories: store.categories,
+        currency: store.currency,
+      ),
+    );
+    if (result != null) setState(() => listFilter = result);
+  }
+
   List<Widget> transactions() {
-    final items = store.transactions
-        .where(
-          (t) =>
-              (filter == 'all' || t.kindRawValue == filter) &&
-              (query.isEmpty ||
-                  '${t.categoryName} ${t.note}'.toLowerCase().contains(
-                    query.toLowerCase(),
-                  )),
-        )
-        .toList();
+    final f = listFilter;
+    final items = f.apply(store.transactions);
+    final totals = DayGroup.totals(items);
+    final filtered = f.activeCount > 0 || f.query.trim().isNotEmpty;
     return [
       TextField(
+        controller: searchController,
+        focusNode: searchFocus,
         decoration: const InputDecoration(
           prefixIcon: Icon(Icons.search),
           hintText: 'Поиск по категории или заметке',
         ),
-        onChanged: (s) => setState(() => query = s),
+        onChanged: (s) => setState(() => listFilter = f.copyWith(query: s)),
       ),
       const SizedBox(height: 16),
       Wrap(
         spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (final e in {
             'all': 'Все',
@@ -590,50 +836,138 @@ class _BalanceShellState extends State<BalanceShell> {
           }.entries)
             ChoiceChip(
               label: Text(e.value),
-              selected: filter == e.key,
-              onSelected: (_) => setState(() => filter = e.key),
+              selected: f.kind == e.key,
+              onSelected: (_) =>
+                  setState(() => listFilter = f.copyWith(kind: e.key)),
             ),
+          Badge(
+            isLabelVisible: f.activeCount > 0,
+            label: Text('${f.activeCount}'),
+            child: OutlinedButton.icon(
+              onPressed: editListFilter,
+              icon: const Icon(Icons.filter_list),
+              label: const Text('Фильтры'),
+            ),
+          ),
+          PopupMenuButton<TransactionSort>(
+            tooltip: 'Сортировка',
+            initialValue: f.sort,
+            onSelected: (v) => setState(() => listFilter = f.copyWith(sort: v)),
+            itemBuilder: (_) => [
+              for (final sort in TransactionSort.values)
+                PopupMenuItem(value: sort, child: Text(sort.title)),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.sort, size: 20),
+                  const SizedBox(width: 6),
+                  Text(f.sort.title),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
-      const SizedBox(height: 20),
-      if (items.isEmpty)
-        const EmptyView(
-          title: 'Операций пока нет',
-          subtitle: 'Добавьте операцию или измените условия поиска.',
-        )
-      else
-        Panel(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Column(
-            children: [
-              for (int i = 0; i < items.length; i++) ...[
-                if (i == 0 ||
-                    !DateUtils.isSameDay(
-                      items[i - 1].date.toLocal(),
-                      items[i].date.toLocal(),
-                    ))
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        DateFormat(
-                          'd MMMM y',
-                          'ru',
-                        ).format(items[i].date.toLocal()),
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                  ),
-                transactionTile(items[i]),
-              ],
-            ],
+      if (f.activeCount > 0) ...[
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            if (f.hasPeriod)
+              InputChip(
+                avatar: const Icon(Icons.date_range, size: 18),
+                label: Text(periodTitle(f)),
+                onPressed: editListFilter,
+                onDeleted: () => setState(() => listFilter = f.withoutPeriod()),
+              ),
+            if (f.hasAmount)
+              InputChip(
+                avatar: const Icon(Icons.payments_outlined, size: 18),
+                label: Text(amountTitle(f, store.currency)),
+                onPressed: editListFilter,
+                onDeleted: () => setState(() => listFilter = f.withoutAmount()),
+              ),
+            if (f.categories.isNotEmpty)
+              InputChip(
+                avatar: const Icon(Icons.category_outlined, size: 18),
+                label: Text(
+                  f.categories.length == 1
+                      ? f.categories.single
+                      : 'Категорий: ${f.categories.length}',
+                ),
+                onPressed: editListFilter,
+                onDeleted: () =>
+                    setState(() => listFilter = f.copyWith(categories: {})),
+              ),
+          ],
+        ),
+      ],
+      const SizedBox(height: 16),
+      if (filtered && items.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text(
+            'Найдено: ${items.length} · расходы '
+            '${money(totals.expensesMinor, store.currency)} · доходы '
+            '${money(totals.incomeMinor, store.currency)}',
           ),
         ),
+      if (items.isEmpty)
+        EmptyView(
+          title: store.transactions.isEmpty
+              ? 'Операций пока нет'
+              : 'Ничего не найдено',
+          subtitle: store.transactions.isEmpty
+              ? 'Добавьте операцию, чтобы она появилась здесь.'
+              : 'Измените поиск или фильтры.',
+          action: filtered
+              ? TextButton(
+                  onPressed: () => setState(() {
+                    // The search box must not keep text the list ignores.
+                    searchController.clear();
+                    listFilter = TransactionFilter(kind: f.kind, sort: f.sort);
+                  }),
+                  child: const Text('Сбросить фильтры'),
+                )
+              : null,
+        )
+      // One lightweight widget per day or slice: the page ListView builds
+      // only those on screen, so tens of thousands of operations stay cheap.
+      else if (f.sort.byDate)
+        for (final day in DayGroup.group(items))
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: DayPanel(
+              group: day,
+              tile: transactionTile,
+              currency: store.currency,
+            ),
+          )
+      else
+        for (var i = 0; i < items.length; i += 50)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: PlainPanel(
+              items: items.sublist(
+                i,
+                i + 50 < items.length ? i + 50 : items.length,
+              ),
+              tile: transactionTile,
+            ),
+          ),
     ];
   }
 
-  Widget spending(DateTime start, DateTime end, {int? limit}) {
+  Widget spending(
+    DateTime start,
+    DateTime end, {
+    int? limit,
+    void Function(String name)? onCategory,
+  }) {
     var groups = FinanceMath.spending(store.transactions, start, end);
     if (limit != null) groups = groups.take(limit).toList();
     final total = FinanceMath.summary(
@@ -652,53 +986,57 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         children: [
           for (final g in groups)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Row(
-                children: [
-                  CategoryAvatar(
-                    icon: g.icon,
-                    emoji: g.emoji,
-                    color: g.colorName,
-                    size: 36,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                g.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Text(
-                              money(g.amountMinor, store.currency),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(
-                          value: total == 0 ? 0 : g.amountMinor / total,
-                          borderRadius: BorderRadius.circular(8),
-                          minHeight: 5,
-                          color: categoryColors[g.colorName],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${total == 0 ? 0 : (g.amountMinor / total * 100).round()}% расходов',
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ],
+            InkWell(
+              onTap: onCategory == null ? null : () => onCategory(g.name),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  children: [
+                    CategoryAvatar(
+                      icon: g.icon,
+                      emoji: g.emoji,
+                      color: g.colorName,
+                      size: 36,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  g.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                money(g.amountMinor, store.currency),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            value: total == 0 ? 0 : g.amountMinor / total,
+                            borderRadius: BorderRadius.circular(8),
+                            minHeight: 5,
+                            color: categoryColors[g.colorName],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${total == 0 ? 0 : (g.amountMinor / total * 100).round()}% расходов',
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
@@ -706,33 +1044,122 @@ class _BalanceShellState extends State<BalanceShell> {
     );
   }
 
+  AnalyticsPeriod analyticsPeriod(DateTime now) => switch (analyticsMode) {
+    'year' => AnalyticsPeriod.year(reportYear),
+    'custom' => customPeriod ?? AnalyticsPeriod.months(1, now),
+    _ => AnalyticsPeriod.months(int.parse(analyticsMode), now),
+  };
+
+  String rangeTitle(DateTime start, DateTime endExclusive) {
+    final last = DateTime(
+      endExclusive.year,
+      endExclusive.month,
+      endExclusive.day - 1,
+    );
+    final format = DateFormat('d MMM y', 'ru');
+    return DateUtils.isSameDay(start, last)
+        ? format.format(start)
+        : '${format.format(start)} – ${format.format(last)}';
+  }
+
+  Future<void> pickAnalyticsRange() async {
+    final now = DateTime.now();
+    final current = customPeriod;
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(now.year + 5),
+      initialDateRange: current == null
+          ? null
+          : DateTimeRange(
+              start: current.start,
+              end: DateTime(
+                current.endExclusive.year,
+                current.endExclusive.month,
+                current.endExclusive.day - 1,
+              ),
+            ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      customPeriod = AnalyticsPeriod.custom(
+        picked.start,
+        DateTime(picked.end.year, picked.end.month, picked.end.day + 1),
+      );
+      analyticsMode = 'custom';
+    });
+  }
+
   List<Widget> analytics() {
     final now = DateTime.now();
-    final start = DateTime(now.year, now.month - months + 1);
-    final end = DateTime(now.year, now.month + 1);
+    final period = analyticsPeriod(now);
+    final start = period.start;
+    final end = period.endExclusive;
     final sum = FinanceMath.summary(store.transactions, start, end);
     final grouped = FinanceMath.spending(store.transactions, start, end);
     final saving = sum.incomeMinor > 0
         ? sum.balanceMinor / sum.incomeMinor * 100
         : 0.0;
-    final days =
-        (DateTime.utc(now.year, now.month, now.day)
-                    .difference(
-                      DateTime.utc(start.year, start.month, start.day),
-                    )
-                    .inDays +
-                1)
-            .clamp(1, 10000);
+    final days = period.elapsedDays(now).clamp(1, 1000000);
     return [
-      SegmentedButton<int>(
-        segments: const [
-          ButtonSegment(value: 1, label: Text('Месяц')),
-          ButtonSegment(value: 3, label: Text('3 месяца')),
-          ButtonSegment(value: 12, label: Text('12 месяцев')),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final e in {
+            '1': 'Месяц',
+            '3': '3 месяца',
+            '12': '12 месяцев',
+            'year': 'Год',
+          }.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: analyticsMode == e.key,
+              onSelected: (_) => setState(() => analyticsMode = e.key),
+            ),
+          ChoiceChip(
+            avatar: const Icon(Icons.date_range, size: 18),
+            label: const Text('Период'),
+            selected: analyticsMode == 'custom',
+            onSelected: (_) => customPeriod == null
+                ? pickAnalyticsRange()
+                : setState(() => analyticsMode = 'custom'),
+          ),
         ],
-        selected: {months},
-        onSelectionChanged: (s) => setState(() => months = s.first),
       ),
+      if (analyticsMode == 'year') ...[
+        const SizedBox(height: 12),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Предыдущий год',
+              onPressed: () => setState(() => reportYear--),
+              icon: const Icon(Icons.chevron_left),
+            ),
+            Text('$reportYear', style: Theme.of(context).textTheme.titleMedium),
+            IconButton(
+              tooltip: 'Следующий год',
+              onPressed: reportYear >= now.year
+                  ? null
+                  : () => setState(() => reportYear++),
+              icon: const Icon(Icons.chevron_right),
+            ),
+          ],
+        ),
+      ],
+      if (analyticsMode == 'custom') ...[
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: InputChip(
+            avatar: const Icon(Icons.edit_calendar_outlined, size: 18),
+            label: Text(rangeTitle(start, end)),
+            tooltip: 'Изменить период',
+            onPressed: pickAnalyticsRange,
+          ),
+        ),
+      ],
       const SizedBox(height: 20),
       metricRow([
         Metric(
@@ -775,6 +1202,19 @@ class _BalanceShellState extends State<BalanceShell> {
         ),
       ]),
       const SizedBox(height: 28),
+      sectionTitle('Сравнение с прошлым периодом'),
+      comparison(PeriodComparison.of(store.transactions, period, now)),
+      if (analyticsMode == '1') ...[
+        const SizedBox(height: 28),
+        sectionTitle('Прогноз до конца месяца'),
+        forecast(now),
+      ],
+      if (analyticsMode == 'year') ...[
+        const SizedBox(height: 28),
+        sectionTitle('Итоги года'),
+        yearReport(YearReport.of(store.transactions, reportYear, now)),
+      ],
+      const SizedBox(height: 28),
       sectionTitle('Динамика доходов и расходов'),
       trend(start, end),
       const SizedBox(height: 28),
@@ -796,48 +1236,300 @@ class _BalanceShellState extends State<BalanceShell> {
         ),
         const SizedBox(height: 16),
       ],
-      spending(start, end),
+      spending(
+        start,
+        end,
+        onCategory: (name) => setState(() => trendCategory = name),
+      ),
+      const SizedBox(height: 28),
+      sectionTitle('Динамика категории'),
+      categoryTrend(period, grouped),
     ];
   }
 
-  Widget trend(DateTime start, DateTime end) {
-    final buckets = <(DateTime, DateTime, String)>[];
-    if (months == 1) {
-      for (
-        var d = start;
-        d.isBefore(end);
-        d = DateTime(d.year, d.month, d.day + 1)
-      ) {
-        buckets.add((d, DateTime(d.year, d.month, d.day + 1), '${d.day}'));
-      }
-    } else if (months == 3) {
-      for (
-        var d = DateTime(
-          start.year,
-          start.month,
-          start.day - start.weekday + 1,
-        );
-        d.isBefore(end);
-        d = DateTime(d.year, d.month, d.day + 7)
-      ) {
-        final e = DateTime(d.year, d.month, d.day + 7);
-        buckets.add((
-          d.isBefore(start) ? start : d,
-          e.isAfter(end) ? end : e,
-          DateFormat('d.MM').format(d),
-        ));
-      }
-    } else {
-      for (var d = start; d.isBefore(end); d = DateTime(d.year, d.month + 1)) {
-        buckets.add((
-          d,
-          DateTime(d.year, d.month + 1),
-          DateFormat('MMM', 'ru').format(d),
-        ));
-      }
+  Widget comparison(PeriodComparison c) {
+    final format = DateFormat('d MMM', 'ru');
+    String range(DateTime s, DateTime e) {
+      final last = DateTime(e.year, e.month, e.day - 1);
+      return DateUtils.isSameDay(s, last)
+          ? format.format(s)
+          : '${format.format(s)} – ${format.format(last)}';
     }
+
+    Widget line(int? change, String text, Color color) => Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(
+            change == null || change == 0
+                ? Icons.trending_flat
+                : change > 0
+                ? Icons.trending_up
+                : Icons.trending_down,
+            color: color,
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
+
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          line(c.expensesChange, c.expensesText, Colors.deepOrange),
+          line(c.incomeChange, c.incomeText, Colors.teal),
+          Text(
+            '${c.partial ? 'Пока период идёт, сравниваются одинаковые сроки: ' : ''}'
+            '${range(c.currentStart, c.currentEnd)} и '
+            '${range(c.previousStart, c.previousEnd)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget forecast(DateTime now) {
+    final f = MonthForecast.of(store.transactions, now);
+    final budget = BudgetForecast.total(store.budgets, store.transactions, now);
+    final day = budget?.exhaustionDay;
+    final danger = budget != null && (budget.exceeded || day != null);
+    return Column(
+      children: [
+        metricRow([
+          Metric(
+            label: 'Ожидаемые расходы за месяц',
+            value: money(f.projectedMinor, store.currency),
+            icon: Icons.query_stats,
+            color: Colors.deepOrange,
+          ),
+          Metric(
+            label: 'Темп трат в день',
+            value: money(f.dailyPaceMinor, store.currency),
+            icon: Icons.speed,
+          ),
+        ]),
+        if (budget != null) ...[
+          const SizedBox(height: 16),
+          Panel(
+            child: Row(
+              children: [
+                Icon(
+                  danger ? Icons.warning_amber_rounded : Icons.check_circle,
+                  color: danger
+                      ? Theme.of(context).colorScheme.error
+                      : Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '${budget.exceeded
+                        ? 'Бюджеты месяца уже исчерпаны'
+                        : day != null
+                        ? 'При текущем темпе бюджет закончится $day-го'
+                        : 'При текущем темпе бюджета хватит до конца месяца'}. '
+                    'Потрачено ${money(budget.usedMinor, store.currency)} '
+                    'из ${money(budget.limitMinor, store.currency)}.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget yearReport(YearReport r) {
+    String month(MonthlyTotal? m) => m == null
+        ? '—'
+        : toBeginningOfSentenceCase(DateFormat('LLLL', 'ru').format(m.month));
+    return Column(
+      children: [
+        metricRow([
+          Metric(
+            label: 'Расходы в среднем за месяц',
+            value: money(r.averageMonthlyExpensesMinor, store.currency),
+            icon: Icons.north_east,
+            color: Colors.deepOrange,
+          ),
+          Metric(
+            label: 'Доходы в среднем за месяц',
+            value: money(r.averageMonthlyIncomeMinor, store.currency),
+            icon: Icons.south_west,
+            color: Colors.teal,
+          ),
+        ]),
+        const SizedBox(height: 16),
+        metricRow([
+          Metric(
+            label: 'Самый затратный месяц',
+            value: month(r.topExpenseMonth),
+            icon: Icons.local_fire_department_outlined,
+          ),
+          Metric(
+            label: 'Самый доходный месяц',
+            value: month(r.topIncomeMonth),
+            icon: Icons.emoji_events_outlined,
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget categoryTrend(
+    AnalyticsPeriod period,
+    List<CategorySpending> inPeriod,
+  ) {
+    final through = DateTime(
+      period.endExclusive.year,
+      period.endExclusive.month,
+      period.endExclusive.day - 1,
+    );
+    final first = DateTime(through.year, through.month - 11);
+    final names = [
+      for (final g in inPeriod) g.name,
+      for (final g in FinanceMath.spending(
+        store.transactions,
+        first,
+        DateTime(through.year, through.month + 1),
+      ))
+        if (!inPeriod.any((p) => p.name == g.name)) g.name,
+    ];
+    if (names.isEmpty) {
+      return const EmptyView(
+        title: 'Расходов пока нет',
+        subtitle: 'Здесь появится динамика трат по выбранной категории.',
+        icon: Icons.show_chart,
+      );
+    }
+    final name = names.contains(trendCategory) ? trendCategory! : names.first;
+    final series = Analytics.categoryTrend(store.transactions, name, through);
+    final total = series.fold(0, (s, m) => s + m.amountMinor);
+    final active = series.where((m) => m.amountMinor > 0).length;
+    var max = 1;
+    for (final m in series) {
+      if (m.amountMinor > max) max = m.amountMinor;
+    }
+    final color =
+        categoryColors[store.transactions
+            .firstWhere((t) => t.categoryName == name)
+            .categoryColorName] ??
+        Theme.of(context).colorScheme.primary;
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<String>(
+            key: ValueKey('trend-$name'),
+            initialValue: name,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Категория'),
+            items: [
+              for (final n in names)
+                DropdownMenuItem(
+                  value: n,
+                  child: Text(n, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) => setState(() => trendCategory = v),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'За 12 месяцев: ${money(total, store.currency)} · в среднем '
+            '${money(active == 0 ? 0 : (total / active).round(), store.currency)} '
+            'в месяц с тратами',
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 170,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (int i = 0; i < series.length; i++)
+                  Expanded(
+                    child: Tooltip(
+                      message:
+                          '${toBeginningOfSentenceCase(DateFormat('LLLL y', 'ru').format(series[i].month))}\n${money(series[i].amountMinor, store.currency)}',
+                      child: Semantics(
+                        label:
+                            '${DateFormat('LLLL y', 'ru').format(series[i].month)}, ${money(series[i].amountMinor, store.currency)}',
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 3,
+                              ),
+                              child: Container(
+                                height: (series[i].amountMinor / max * 130)
+                                    .clamp(2, 130)
+                                    .toDouble(),
+                                decoration: BoxDecoration(
+                                  color: series[i].amountMinor == 0
+                                      ? Theme.of(
+                                          context,
+                                        ).colorScheme.surfaceContainerHighest
+                                      : color,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              height: 24,
+                              child: i.isEven
+                                  ? Text(
+                                      DateFormat(
+                                        'MMM',
+                                        'ru',
+                                      ).format(series[i].month),
+                                      style: const TextStyle(fontSize: 10),
+                                      maxLines: 1,
+                                    )
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget trend(DateTime start, DateTime end) {
+    final buckets = TrendBucket.of(start, end);
+    final last = DateTime(end.year, end.month, end.day - 1);
+    final dayFormat = start.month == last.month && start.year == last.year
+        ? DateFormat('d')
+        : DateFormat('d.MM');
+    final monthFormat = start.year == last.year
+        ? DateFormat('MMM', 'ru')
+        : DateFormat('MM.yy');
+    String label(TrendBucket b) => switch (b.size) {
+      BucketSize.day => dayFormat.format(b.start),
+      BucketSize.week => DateFormat('d.MM').format(b.start),
+      BucketSize.month => monthFormat.format(b.start),
+    };
+    String title(TrendBucket b) => switch (b.size) {
+      BucketSize.day => DateFormat('d MMM y', 'ru').format(b.start),
+      BucketSize.week => rangeTitle(b.start, b.endExclusive),
+      BucketSize.month => toBeginningOfSentenceCase(
+        DateFormat('LLLL y', 'ru').format(b.start),
+      ),
+    };
     final summaries = buckets
-        .map((b) => FinanceMath.summary(store.transactions, b.$1, b.$2))
+        .map(
+          (b) =>
+              FinanceMath.summary(store.transactions, b.start, b.endExclusive),
+        )
         .toList();
     var max = 1;
     for (final s in summaries) {
@@ -865,10 +1557,10 @@ class _BalanceShellState extends State<BalanceShell> {
                   Expanded(
                     child: Tooltip(
                       message:
-                          '${DateFormat('d MMM', 'ru').format(buckets[i].$1)}\nДоходы: ${money(summaries[i].incomeMinor, store.currency)}\nРасходы: ${money(summaries[i].expensesMinor, store.currency)}',
+                          '${title(buckets[i])}\nДоходы: ${money(summaries[i].incomeMinor, store.currency)}\nРасходы: ${money(summaries[i].expensesMinor, store.currency)}',
                       child: Semantics(
                         label:
-                            '${buckets[i].$3}, доходы ${money(summaries[i].incomeMinor, store.currency)}, расходы ${money(summaries[i].expensesMinor, store.currency)}',
+                            '${title(buckets[i])}, доходы ${money(summaries[i].incomeMinor, store.currency)}, расходы ${money(summaries[i].expensesMinor, store.currency)}',
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -915,7 +1607,7 @@ class _BalanceShellState extends State<BalanceShell> {
                               height: 24,
                               child: i % ((buckets.length / 8).ceil()) == 0
                                   ? Text(
-                                      buckets[i].$3,
+                                      label(buckets[i]),
                                       style: const TextStyle(fontSize: 10),
                                       maxLines: 1,
                                     )
@@ -999,6 +1691,11 @@ class _BalanceShellState extends State<BalanceShell> {
 
   Widget budgetCard(BudgetRecord b) {
     final used = FinanceMath.budgetUsed(b, store.transactions);
+    final runsOut = BudgetForecast.of(
+      b,
+      store.transactions,
+      DateTime.now(),
+    )?.exhaustionDay;
     final ratio = b.limitMinor > 0 ? used / b.limitMinor : 0.0;
     final color = b.limitMinor <= 0 || ratio >= 1
         ? Theme.of(context).colorScheme.error
@@ -1065,6 +1762,22 @@ class _BalanceShellState extends State<BalanceShell> {
                 : 'Осталось: ${money(b.limitMinor - used, store.currency)}',
             style: TextStyle(color: color),
           ),
+          if (runsOut != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: Colors.orange,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text('При текущем темпе лимит закончится $runsOut-го'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );
@@ -1295,16 +2008,109 @@ class _BalanceShellState extends State<BalanceShell> {
         ],
       ),
     ),
+    if (kIsWeb ||
+        defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows ||
+        defaultTargetPlatform == TargetPlatform.macOS) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Горячие клавиши'),
+            for (final (keys, action) in [
+              ('${shortcutModifier}N', 'Новая операция'),
+              ('${shortcutModifier}F', 'Поиск операций'),
+              ('${shortcutModifier}1 … ${shortcutModifier}5', 'Разделы'),
+              if (widget.lock?.enabled ?? false)
+                ('${shortcutModifier}L', 'Заблокировать'),
+              ('Esc', 'Закрыть окно или отменить'),
+            ])
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 120,
+                      child: Text(
+                        keys,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                    Expanded(child: Text(action)),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    ],
+    if (widget.notifications != null) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Уведомления'),
+            NotificationsPanel(
+              notifications: widget.notifications!,
+              store: store,
+              run: run,
+            ),
+          ],
+        ),
+      ),
+    ],
+    if (widget.lock != null) ...[
+      const SizedBox(height: 20),
+      Panel(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            sectionTitle('Приватность'),
+            PrivacyPanel(lock: widget.lock!, run: run),
+          ],
+        ),
+      ),
+    ],
     const SizedBox(height: 20),
     Panel(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           sectionTitle('Данные'),
+          if (store.quarantine.isNotEmpty) ...[
+            QuarantinePanel(
+              entries: store.quarantine,
+              onSave: saveQuarantine,
+              onClear: clearQuarantine,
+            ),
+            const SizedBox(height: 16),
+          ],
+          const Text(
+            'Резервная копия хранит все операции, категории и бюджеты без потерь. '
+            'Восстановление добавляет записи из копии и не затирает более новые изменения.',
+          ),
+          const SizedBox(height: 16),
           Wrap(
             spacing: 12,
             runSpacing: 12,
             children: [
+              FilledButton.tonalIcon(
+                onPressed: backup,
+                icon: const Icon(Icons.backup_outlined),
+                label: const Text('Резервная копия'),
+              ),
+              OutlinedButton.icon(
+                onPressed: restore,
+                icon: const Icon(Icons.settings_backup_restore),
+                label: const Text('Восстановить из копии'),
+              ),
+              OutlinedButton.icon(
+                onPressed: importStatement,
+                icon: const Icon(Icons.account_balance_outlined),
+                label: const Text('Импорт выписки банка'),
+              ),
               OutlinedButton.icon(
                 onPressed: export,
                 icon: const Icon(Icons.download_outlined),
@@ -1314,7 +2120,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 onPressed: () => showAboutDialog(
                   context: context,
                   applicationName: 'Баланс',
-                  applicationVersion: '4.1.1',
+                  applicationVersion: '4.2.0',
                   applicationIcon: const Icon(
                     Icons.account_balance_wallet_outlined,
                     size: 40,
@@ -1474,44 +2280,117 @@ class _BalanceShellState extends State<BalanceShell> {
     password.dispose();
   }
 
-  Future<void> export() async {
+  Future<void> export() => run(
+    () => saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(FinanceMath.exportCsv(store.transactions)),
+      ),
+      name: 'balance-transactions.csv',
+      mimeType: 'text/csv',
+      label: 'CSV',
+      extension: 'csv',
+    ),
+  );
+
+  Future<void> backup() => run(() async {
+    final data = await store.exportBackup();
+    if (!mounted) return;
+    final day = DateFormat('yyyy-MM-dd').format(DateTime.now());
+    await saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(const JsonEncoder.withIndent(' ').convert(data)),
+      ),
+      name: 'balance-backup-$day.json',
+      mimeType: 'application/json',
+      label: 'JSON',
+      extension: 'json',
+    );
+  });
+
+  Future<void> restore() async {
+    final file = await pickFile('Резервная копия', ['json']);
+    if (file == null || !mounted) return;
     await run(() async {
-      final csv = FinanceMath.exportCsv(store.transactions);
-      final bytes = Uint8List.fromList(utf8.encode(csv));
-      if (!kIsWeb &&
-          (defaultTargetPlatform == TargetPlatform.android ||
-              defaultTargetPlatform == TargetPlatform.iOS)) {
-        final box = context.findRenderObject() as RenderBox?;
-        await SharePlus.instance.share(
-          ShareParams(
-            files: [
-              XFile.fromData(
-                bytes,
-                mimeType: 'text/csv',
-                name: 'balance-transactions.csv',
-              ),
-            ],
-            fileNameOverrides: ['balance-transactions.csv'],
-            sharePositionOrigin: box == null
-                ? null
-                : box.localToGlobal(Offset.zero) & box.size,
-          ),
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(utf8.decode(await file.readAsBytes()));
+      } on FormatException {
+        throw const FormatException('Файл повреждён или это не JSON');
+      }
+      final plan = await store.previewBackup(decoded);
+      if (plan.items.isEmpty) {
+        throw FormatException(
+          plan.invalid > 0
+              ? 'В копии нет читаемых записей'
+              : 'Восстанавливать нечего: копия пуста или содержит только удаления',
         );
-      } else {
-        final location = await getSaveLocation(
-          suggestedName: 'balance-transactions.csv',
-          acceptedTypeGroups: const [
-            XTypeGroup(label: 'CSV', extensions: ['csv']),
-          ],
-        );
-        if (location != null) {
-          await XFile.fromData(
-            bytes,
-            mimeType: 'text/csv',
-            name: 'balance-transactions.csv',
-          ).saveTo(location.path);
-        }
+      }
+      if (!mounted) return;
+      final keys = await showBackupPreview(
+        context,
+        plan: plan,
+        fileName: file.name,
+        currency: store.currency,
+      );
+      if (keys == null) return;
+      final result = await store.restoreBackup(decoded, only: keys);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(result.describe())));
       }
     });
+  }
+
+  Future<void> importStatement() async {
+    final file = await pickFile(
+      'Выписка',
+      ['csv', 'txt', 'ofx', 'qfx'],
+      androidMimeTypes: const [
+        'application/x-ofx',
+        'application/vnd.intu.qfx',
+        'application/octet-stream',
+      ],
+    );
+    if (file == null || !mounted) return;
+    await run(() async {
+      final records = await runStatementImport(context, store, file);
+      if (records == null) return;
+      final added = await store.importTransactions(records);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Импортировано операций: $added')),
+        );
+      }
+    });
+  }
+
+  Future<void> saveQuarantine() => run(
+    () => saveFile(
+      context,
+      Uint8List.fromList(
+        utf8.encode(
+          const JsonEncoder.withIndent(' ').convert(store.quarantineReport()),
+        ),
+      ),
+      name: 'balance-damaged-records.json',
+      mimeType: 'application/json',
+      label: 'JSON',
+      extension: 'json',
+    ),
+  );
+
+  Future<void> clearQuarantine() async {
+    if (await confirmDelete(
+      context,
+      'Очистить отложенные записи?',
+      message:
+          'Копии повреждённых записей будут удалены с устройства. Сначала сохраните отчёт, если они нужны.',
+      action: 'Очистить',
+    )) {
+      await run(store.clearQuarantine);
+    }
   }
 }

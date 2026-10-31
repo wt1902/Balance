@@ -33,6 +33,7 @@ BalanceFlutter/
 ├── SYNC_PROTOCOL.md       # как Flutter-клиент реализует wire-протокол
 ├── FEATURE_PARITY.md      # аудит переноса функций из нативных клиентов
 ├── VALIDATION.md          # что и как проверено, известные ограничения
+├── ROADMAP.md             # идеи новых функций и приоритеты
 ├── docs/                  # скриншоты для README
 │   └── ecosystem/         # общий контракт экосистемы (sync, модель данных, безопасность)
 ├── branding/              # иконка приложения, аватар и баннер README: SVG, PNG, render.sh
@@ -41,17 +42,27 @@ BalanceFlutter/
 │   ├── main.dart
 │   ├── domain/
 │   │   ├── finance.dart     # модели, FinanceMath, категории, CSV
+│   │   ├── backup.dart      # формат JSON-копии, план восстановления, карантин
+│   │   ├── statement_import.dart # разбор выписок CSV/OFX и своего CSV
+│   │   ├── templates.dart   # шаблоны быстрого ввода и частые траты
+│   │   ├── transaction_filter.dart # фильтры, сортировка и дни списка операций
+│   │   ├── money_format.dart # money(): формат сумм для UI и виджета
 │   │   └── appearance.dart  # пресеты оформления (ColorPreset)
 │   ├── services/
 │   │   ├── app_store.dart   # AppStore: состояние, CRUD, очередь изменений, сессии, sync
 │   │   ├── sync_api.dart    # SyncApi: HTTP-клиент /v1 API
 │   │   ├── storage*.dart    # Sembast (native) / IndexedDB (web) снапшоты
-│   │   ├── runtime_lock*.dart # межпроцессная/межвкладочная блокировка
-│   │   └── background.dart  # фоновая синхронизация (WorkManager, Android)
+│   │   ├── runtime_lock*.dart # блокировка: Android, Web Locks, файл ОС на десктопе
+│   │   ├── background.dart  # фоновая синхронизация (WorkManager, Android)
+│   │   ├── launch_actions.dart # канал balance/launch: плитка, виджет Android
+│   │   ├── notifications.dart # уведомления: бюджет 80/100%, напоминание
+│   │   ├── app_lock.dart    # блокировка PIN-кодом и биометрией
+│   │   └── widget_summary.dart # строки для виджета главного экрана
 │   └── ui/
 │       ├── app.dart         # BalanceApp, BalanceShell, экраны
 │       ├── editors.dart     # формы операции, категории, бюджета
 │       ├── design.dart      # переиспользуемые виджеты
+│       ├── data_tools.dart  # копия, импорт выписок, предпросмотры, карантин
 │       └── app_theme.dart   # темы и пресеты Material 3
 ├── packages/balance_runtime/ # плагин: file lock на Android (Java + JVM-тесты)
 ├── test/                     # unit, store, HTTP, widget и screenshot-тесты
@@ -77,6 +88,11 @@ BalanceFlutter/
   данных — только через методы `AppStore`.
 - Платформенный код (`android/`, `ios/`, …) трогай только когда это
   действительно нужно; analyzer его не проверяет.
+  Нативные точки входа Android: `QuickAddTileService` (плитка Quick
+  Settings) и `BalanceWidgetProvider` (виджет) в
+  `android/app/src/main/kotlin/com/balance/balance/`; связь с Dart — канал
+  `balance/launch` в `MainActivity`. Виджет читает строки `flutter.widget.*`,
+  которые пишет `AppStore`; расчёты для них — в `FinanceMath`.
 
 ### 2. Деньги и даты
 
@@ -107,6 +123,18 @@ BalanceFlutter/
   tombstone при удалении. Не изменяй коллекции в обход этих методов.
 - Сохранение данных и курсора — транзакционное: страница pull'а
   применяется целиком или откатывается. Не разделяй эту запись.
+- Журнал scope хранится в Sembast по записям (`ledger|<scope>`: `t:`, `c:`,
+  `b:`, `d:`, `x:` и `meta`). `AppStore._persist` пишет только изменённые
+  записи: записи неизменяемы, изменения определяются по ссылке. Поэтому меняй
+  записи только заменой (`copyWith`, новый Map), не изменяй их на месте.
+- Любая запись в хранилище идёт через `AppStore` и сначала ставит новую
+  `ledgerRevision` в настройках. По ней другие движки (фоновая синхронизация,
+  вкладки Web) понимают, что нужно перечитать данные. `LedgerStorage` держит
+  базу открытой и после каждой записи ждёт `flush`. Не обходи эти пути.
+- Производительность на большом журнале: `flutter test
+  tool/benchmark/ledger_benchmark_test.dart` (размеры —
+  `BALANCE_BENCH_SIZES`). При изменениях хранения сравни цифры с
+  `VALIDATION.md`.
 - Данные разделены по scope «сервер + пользователь». Первый вход
   переносит гостевые записи в аккаунт; logout и смена сервера локальные
   данные не удаляют.
@@ -126,6 +154,11 @@ BalanceFlutter/
   только в памяти и показывается предупреждение — сохраняй это поведение,
   не добавляй fallback в `shared_preferences` или файлы.
 - Пароли нигде не сохраняются.
+- PIN-код блокировки приложения хранится только как солёный хеш
+  PBKDF2-HMAC-SHA256 в `flutter_secure_storage` (`lib/domain/pin_hash.dart`,
+  `lib/services/app_lock.dart`). Если защищённое хранилище недоступно,
+  блокировку включить нельзя: не добавляй запасной вариант. Блокировка
+  скрывает интерфейс (`PrivacyGate`), а не шифрует журнал.
 - Удалённый сервер — только HTTPS. HTTP разрешён только для `localhost`,
   `127.0.0.1`, `::1` и `10.0.2.2` (Android-эмулятор). URL с
   credentials, query или fragment отклоняется.
@@ -194,6 +227,7 @@ Pillow). Скрипт перерисует PNG и через `tool/update_icons.
 - Меняешь протокол или его реализацию → `SYNC_PROTOCOL.md`.
 - Меняешь функции относительно нативных клиентов → `FEATURE_PARITY.md`.
 - Выполнил новые проверки или нашёл ограничение → `VALIDATION.md`.
+- Реализовал пункт из `ROADMAP.md` → отметь его там.
 - Меняешь сборку, CI или запуск → `README.md` и этот файл.
 - `docs/ecosystem/` — копия общего контракта из монорепозитория; его
   ссылки на `../BalanceServer/...` и т.п. в этом репозитории не работают.
