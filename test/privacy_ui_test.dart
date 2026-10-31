@@ -157,8 +157,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(LockScreen), findsOneWidget);
       expect(find.text('Введите PIN-код'), findsOneWidget);
-      expect(find.text('Настройки', skipOffstage: false), findsWidgets);
-      expect(find.text('Настройки'), findsNothing); // offstage
+      expect(find.text('Аналитика', skipOffstage: false), findsWidgets);
+      expect(find.text('Аналитика'), findsNothing); // offstage
       noError(tester);
 
       await pin(tester, '9999');
@@ -170,7 +170,7 @@ void main() {
       await pin(tester, '1234');
       await done(tester);
       expect(find.byType(LockScreen), findsNothing);
-      expect(find.text('Настройки'), findsWidgets);
+      expect(find.text('Аналитика'), findsWidgets);
       noError(tester);
 
       // Physical keyboard.

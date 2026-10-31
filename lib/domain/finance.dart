@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Finance values use hundredths of a currency unit internally. JSON retains
 /// the existing iOS / Android / Go synchronization protocol.
 enum TransactionKind {
@@ -36,7 +38,115 @@ String formatMinor(int value) {
 DateTime _date(dynamic value) => DateTime.parse(value as String);
 String _timestamp(DateTime value) => value.toUtc().toIso8601String();
 
-class TransactionRecord {
+/// A record synchronized through `/v1/sync`. [payload] is the wire payload,
+/// including fields this client does not know (contract v2 §0.2), and
+/// [toJson] the local snapshot form, which also carries `id` and `updatedAt`.
+abstract interface class SyncRecord {
+  String get id;
+  DateTime get updatedAt;
+  Map<String, dynamic> payload();
+  Map<String, dynamic> toJson();
+
+  /// The same record with a new [updatedAt].
+  SyncRecord stamped(DateTime updatedAt);
+}
+
+/// Keys of the local snapshot form that are not part of a wire payload.
+const localRecordKeys = {'id', 'updatedAt', 'amountMinor', 'limitMinor'};
+
+/// Payload fields this client does not know, kept as received so that a later
+/// save sends them back unchanged (forward compatibility, contract v2 §0.2).
+Map<String, dynamic> unknownPayloadFields(
+  Map<String, dynamic> payload,
+  Set<String> known,
+) => Map.unmodifiable({
+  for (final entry in payload.entries)
+    if (!known.contains(entry.key) && !localRecordKeys.contains(entry.key))
+      entry.key: entry.value,
+});
+
+/// Marks an omitted nullable argument of a `copyWith`, so `null` can clear it.
+const Object keepValue = _Keep();
+
+class _Keep {
+  const _Keep();
+}
+
+T? keepOr<T>(Object? value, T? current) =>
+    identical(value, keepValue) ? current : value as T?;
+
+/// Tags of an operation (contract v2 §6): trimmed, 1–32 characters, unique
+/// regardless of case, at most 10, order kept.
+class TagRules {
+  static const maxLength = 32, maxCount = 10;
+
+  /// Lenient form for data from the wire or files: invalid tags are dropped.
+  static List<String> normalize(Iterable<Object?> tags) {
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in tags) {
+      if (raw is! String) continue;
+      final tag = raw.trim();
+      final length = tag.runes.length;
+      if (length < 1 || length > maxLength) continue;
+      if (!seen.add(tag.toLowerCase())) continue;
+      result.add(tag);
+      if (result.length == maxCount) break;
+    }
+    return List.unmodifiable(result);
+  }
+
+  /// Strict form for user input: rejects instead of dropping.
+  static List<String> validate(Iterable<String> tags) {
+    final trimmed = [
+      for (final tag in tags)
+        if (tag.trim().isNotEmpty) tag.trim(),
+    ];
+    if (trimmed.any((tag) => tag.runes.length > maxLength)) {
+      throw ArgumentError('Тег длиннее $maxLength символов');
+    }
+    final result = normalize(trimmed);
+    if ({for (final tag in trimmed) tag.toLowerCase()}.length > maxCount) {
+      throw ArgumentError('Не больше $maxCount тегов');
+    }
+    return result;
+  }
+}
+
+/// ISO 4217 code in upper case (`RUB`, `EUR`, …).
+bool isCurrencyCode(String value) => RegExp(r'^[A-Z]{3}$').hasMatch(value);
+
+String? _currency(Object? value) {
+  if (value == null) return null;
+  final code = (value as String).trim().toUpperCase();
+  if (code.isEmpty) return null;
+  if (!isCurrencyCode(code)) throw const FormatException('Неверный код валюты');
+  return code;
+}
+
+/// `YYYY-MM-DD` of a UTC calendar date.
+String isoDay(DateTime value) {
+  final utc = value.toUtc();
+  return '${utc.year.toString().padLeft(4, '0')}-'
+      '${utc.month.toString().padLeft(2, '0')}-'
+      '${utc.day.toString().padLeft(2, '0')}';
+}
+
+/// Parses `YYYY-MM-DD` as a UTC midnight; anything else is rejected.
+DateTime parseIsoDay(String value) {
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+  if (match == null) throw const FormatException('Неверная дата YYYY-MM-DD');
+  final y = int.parse(match[1]!), m = int.parse(match[2]!);
+  final d = int.parse(match[3]!);
+  final date = DateTime.utc(y, m, d);
+  if (date.year != y || date.month != m || date.day != d) {
+    throw const FormatException('Неверная дата YYYY-MM-DD');
+  }
+  return date;
+}
+
+class TransactionRecord implements SyncRecord {
+  @override
   final String id;
   final int amountMinor;
   final DateTime date;
@@ -47,7 +157,16 @@ class TransactionRecord {
       categoryColorName;
   final bool isBalanceAdjustment;
   final String kindRawValue;
+  @override
   final DateTime updatedAt;
+
+  /// Contract v2: account, explicit currency (otherwise the account's, then
+  /// the base currency), tags and the recurring rule that created it.
+  final String? accountId, currency, recurringId, occurrence;
+  final List<String> tags;
+
+  /// Payload fields of newer clients, sent back unchanged.
+  final Map<String, dynamic> extra;
 
   const TransactionRecord({
     required this.id,
@@ -61,11 +180,43 @@ class TransactionRecord {
     this.categoryColorName = 'auto',
     this.isBalanceAdjustment = false,
     this.kindRawValue = 'expense',
+    this.accountId,
+    this.currency,
+    this.tags = const [],
+    this.recurringId,
+    this.occurrence,
+    this.extra = const {},
   });
+
+  static const payloadKeys = {
+    'amount',
+    'date',
+    'note',
+    'categoryName',
+    'categoryIcon',
+    'categoryEmoji',
+    'categoryColorName',
+    'isBalanceAdjustment',
+    'kindRawValue',
+    'accountId',
+    'currency',
+    'tags',
+    'recurringId',
+    'occurrence',
+  };
 
   double get amount => amountMinor / 100;
   TransactionKind get kind => TransactionKind.parse(kindRawValue);
+
+  /// Signed amount: income positive, expense negative.
+  int get signedMinor =>
+      kind == TransactionKind.income ? amountMinor : -amountMinor;
+
+  /// New v2 fields are written only when set, so a v1 record keeps exactly
+  /// its v1 payload.
+  @override
   Map<String, dynamic> payload() => {
+    ...extra,
     'amount': amount,
     'date': _timestamp(date),
     'note': note,
@@ -75,11 +226,17 @@ class TransactionRecord {
     'categoryColorName': categoryColorName,
     'isBalanceAdjustment': isBalanceAdjustment,
     'kindRawValue': kindRawValue,
+    'accountId': ?accountId,
+    'currency': ?currency,
+    if (tags.isNotEmpty) 'tags': tags,
+    'recurringId': ?recurringId,
+    'occurrence': ?occurrence,
   };
+  @override
   Map<String, dynamic> toJson() => {
+    ...payload(),
     'id': id,
     'updatedAt': _timestamp(updatedAt),
-    ...payload(),
     'amountMinor': amountMinor,
   };
   factory TransactionRecord.fromJson(Map<String, dynamic> json) =>
@@ -104,6 +261,12 @@ class TransactionRecord {
     categoryColorName: payload['categoryColorName'] as String? ?? 'auto',
     isBalanceAdjustment: payload['isBalanceAdjustment'] as bool? ?? false,
     kindRawValue: payload['kindRawValue'] as String? ?? 'expense',
+    accountId: _nonEmpty(payload['accountId'] as String?),
+    currency: _currency(payload['currency']),
+    tags: TagRules.normalize(payload['tags'] as List? ?? const []),
+    recurringId: _nonEmpty(payload['recurringId'] as String?),
+    occurrence: _nonEmpty(payload['occurrence'] as String?),
+    extra: unknownPayloadFields(payload, payloadKeys),
   );
   TransactionRecord copyWith({
     String? id,
@@ -117,6 +280,12 @@ class TransactionRecord {
     bool? isBalanceAdjustment,
     String? kindRawValue,
     DateTime? updatedAt,
+    Object? accountId = keepValue,
+    Object? currency = keepValue,
+    List<String>? tags,
+    Object? recurringId = keepValue,
+    Object? occurrence = keepValue,
+    Map<String, dynamic>? extra,
   }) => TransactionRecord(
     id: id ?? this.id,
     amountMinor: amountMinor ?? this.amountMinor,
@@ -129,12 +298,29 @@ class TransactionRecord {
     categoryColorName: categoryColorName ?? this.categoryColorName,
     isBalanceAdjustment: isBalanceAdjustment ?? this.isBalanceAdjustment,
     kindRawValue: kindRawValue ?? this.kindRawValue,
+    accountId: keepOr<String>(accountId, this.accountId),
+    currency: keepOr<String>(currency, this.currency),
+    tags: tags ?? this.tags,
+    recurringId: keepOr<String>(recurringId, this.recurringId),
+    occurrence: keepOr<String>(occurrence, this.occurrence),
+    extra: extra ?? this.extra,
   );
+  @override
+  TransactionRecord stamped(DateTime updatedAt) =>
+      copyWith(updatedAt: updatedAt);
 }
 
-class CategoryRecord {
-  final String id, name, icon, emoji, colorName, kindRawValue;
-  final DateTime createdAt, updatedAt;
+String? _nonEmpty(String? value) =>
+    value == null || value.isEmpty ? null : value;
+
+class CategoryRecord implements SyncRecord {
+  @override
+  final String id;
+  final String name, icon, emoji, colorName, kindRawValue;
+  final DateTime createdAt;
+  @override
+  final DateTime updatedAt;
+  final Map<String, dynamic> extra;
   const CategoryRecord({
     required this.id,
     required this.name,
@@ -144,9 +330,20 @@ class CategoryRecord {
     required this.updatedAt,
     this.emoji = '',
     this.kindRawValue = 'expense',
+    this.extra = const {},
   });
+  static const payloadKeys = {
+    'name',
+    'icon',
+    'emoji',
+    'colorName',
+    'kindRawValue',
+    'createdAt',
+  };
   TransactionKind get kind => TransactionKind.parse(kindRawValue);
+  @override
   Map<String, dynamic> payload() => {
+    ...extra,
     'name': name,
     'icon': icon,
     'emoji': emoji,
@@ -154,10 +351,11 @@ class CategoryRecord {
     'kindRawValue': kindRawValue,
     'createdAt': _timestamp(createdAt),
   };
+  @override
   Map<String, dynamic> toJson() => {
+    ...payload(),
     'id': id,
     'updatedAt': _timestamp(updatedAt),
-    ...payload(),
   };
   factory CategoryRecord.fromJson(Map<String, dynamic> json) =>
       CategoryRecord.fromPayload(
@@ -180,6 +378,7 @@ class CategoryRecord {
     createdAt: payload['createdAt'] == null
         ? updatedAt
         : _date(payload['createdAt']),
+    extra: unknownPayloadFields(payload, payloadKeys),
   );
   CategoryRecord copyWith({
     String? id,
@@ -190,6 +389,7 @@ class CategoryRecord {
     String? kindRawValue,
     DateTime? createdAt,
     DateTime? updatedAt,
+    Map<String, dynamic>? extra,
   }) => CategoryRecord(
     id: id ?? this.id,
     name: name ?? this.name,
@@ -199,13 +399,21 @@ class CategoryRecord {
     kindRawValue: kindRawValue ?? this.kindRawValue,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
+    extra: extra ?? this.extra,
   );
+  @override
+  CategoryRecord stamped(DateTime updatedAt) => copyWith(updatedAt: updatedAt);
 }
 
-class BudgetRecord {
-  final String id, categoryName, categoryIcon, categoryEmoji;
+class BudgetRecord implements SyncRecord {
+  @override
+  final String id;
+  final String categoryName, categoryIcon, categoryEmoji;
   final int limitMinor;
-  final DateTime monthStart, updatedAt;
+  final DateTime monthStart;
+  @override
+  final DateTime updatedAt;
+  final Map<String, dynamic> extra;
   const BudgetRecord({
     required this.id,
     required this.categoryName,
@@ -214,19 +422,30 @@ class BudgetRecord {
     required this.updatedAt,
     this.categoryIcon = 'circle.fill',
     this.categoryEmoji = '',
+    this.extra = const {},
   });
+  static const payloadKeys = {
+    'categoryName',
+    'categoryIcon',
+    'categoryEmoji',
+    'limit',
+    'monthStart',
+  };
   double get limit => limitMinor / 100;
+  @override
   Map<String, dynamic> payload() => {
+    ...extra,
     'categoryName': categoryName,
     'categoryIcon': categoryIcon,
     'categoryEmoji': categoryEmoji,
     'limit': limit,
     'monthStart': _timestamp(monthStart),
   };
+  @override
   Map<String, dynamic> toJson() => {
+    ...payload(),
     'id': id,
     'updatedAt': _timestamp(updatedAt),
-    ...payload(),
     'limitMinor': limitMinor,
   };
   factory BudgetRecord.fromJson(Map<String, dynamic> json) =>
@@ -247,6 +466,7 @@ class BudgetRecord {
     categoryEmoji: payload['categoryEmoji'] as String? ?? '',
     limitMinor: moneyToMinor(payload['limit'] as num),
     monthStart: _date(payload['monthStart']),
+    extra: unknownPayloadFields(payload, payloadKeys),
   );
   BudgetRecord copyWith({
     String? id,
@@ -256,6 +476,7 @@ class BudgetRecord {
     int? limitMinor,
     DateTime? monthStart,
     DateTime? updatedAt,
+    Map<String, dynamic>? extra,
   }) => BudgetRecord(
     id: id ?? this.id,
     categoryName: categoryName ?? this.categoryName,
@@ -264,7 +485,10 @@ class BudgetRecord {
     limitMinor: limitMinor ?? this.limitMinor,
     monthStart: monthStart ?? this.monthStart,
     updatedAt: updatedAt ?? this.updatedAt,
+    extra: extra ?? this.extra,
   );
+  @override
+  BudgetRecord stamped(DateTime updatedAt) => copyWith(updatedAt: updatedAt);
 }
 
 class Tombstone {
@@ -439,6 +663,7 @@ class FinanceMath {
 
   /// The first five columns match the native clients' export; the rest make a
   /// transaction lossless, so StatementImport can read the file back exactly.
+  /// A file is recognized as Balance's own by these columns.
   static const csvHeader = [
     'Дата',
     'Тип',
@@ -453,6 +678,16 @@ class FinanceMath {
     'Изменено',
   ];
 
+  /// Contract v2 fields, appended after [csvHeader]; optional when reading,
+  /// so files exported before v2 still import. Tags are a JSON array.
+  static const csvHeaderV2 = [
+    'Счёт',
+    'Валюта',
+    'Теги',
+    'Регулярная',
+    'Повторение',
+  ];
+
   /// Spreadsheets run cells starting with `= + - @`, tab or CR as formulas.
   /// A leading apostrophe disarms them; it is also added before an existing
   /// apostrophe, so [csvValue] can remove exactly one and restore the text.
@@ -465,9 +700,27 @@ class FinanceMath {
   /// ISO 8601 UTC dates, amounts in units with exactly two decimals.
   static String exportCsv(Iterable<TransactionRecord> items) {
     final ordered = items.toList()..sort((a, b) => b.date.compareTo(a.date));
+    List<String> row(TransactionRecord item) => [
+      _timestamp(item.date),
+      item.isBalanceAdjustment ? 'Корректировка' : item.kind.title,
+      item.categoryName,
+      formatMinor(item.amountMinor),
+      item.note,
+      item.id,
+      item.kindRawValue,
+      item.categoryIcon,
+      item.categoryEmoji,
+      item.categoryColorName,
+      _timestamp(item.updatedAt),
+      item.accountId ?? '',
+      item.currency ?? '',
+      item.tags.isEmpty ? '' : jsonEncode(item.tags),
+      item.recurringId ?? '',
+      item.occurrence ?? '',
+    ];
     return '\uFEFF${[
-      csvHeader.join(','),
-      ...ordered.map((item) => [_timestamp(item.date), item.isBalanceAdjustment ? 'Корректировка' : item.kind.title, item.categoryName, formatMinor(item.amountMinor), item.note, item.id, item.kindRawValue, item.categoryIcon, item.categoryEmoji, item.categoryColorName, _timestamp(item.updatedAt)].map((value) => escapeCsv(csvCell(value))).join(',')),
+      [...csvHeader, ...csvHeaderV2].join(','),
+      ...ordered.map((item) => row(item).map((value) => escapeCsv(csvCell(value))).join(',')),
     ].join('\n')}';
   }
 }

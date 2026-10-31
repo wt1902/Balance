@@ -29,7 +29,7 @@ Future<void> main() async {
     Timer? pending;
     void check() => notifications.ledgerChanged(
       budgets: store.budgets,
-      transactions: store.transactions,
+      transactions: store.baseTransactions.items,
     );
     store.addListener(() {
       pending?.cancel();

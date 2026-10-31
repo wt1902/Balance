@@ -1,18 +1,19 @@
 import 'package:sembast/sembast.dart';
 
+import '../domain/records.dart';
 import 'storage_native.dart'
     if (dart.library.js_interop) 'storage_web.dart'
     as platform;
 
-/// Record keys of a scope's ledger: `t:`, `c:`, `b:` + id for transactions,
-/// categories and budgets, `d:`/`x:` + `entity:id` for queued changes and
-/// tombstones. Cursor and last sync time live in a `meta` record.
-const ledgerSections = {
-  't': 'transactions',
-  'c': 'categories',
-  'b': 'budgets',
+/// Record keys of a scope's ledger: an entity prefix (`t:`, `c:`, `b:`, `a:`
+/// … see [entityCodecs]) + id for records, `d:`/`x:` + `entity:id` for queued
+/// changes and tombstones, `u:` + sha256 for attachment files not uploaded
+/// yet. Cursor and last sync time live in a `meta` record.
+final ledgerSections = {
+  for (final codec in entityCodecs.values) codec.prefix: codec.section,
   'd': 'dirty',
   'x': 'tombstones',
+  'u': 'uploads',
 };
 
 /// Snapshot read back from per-record storage. [ledgerLayout] marks a
@@ -42,9 +43,11 @@ class LedgerDelta {
     for (final entry in ledgerSections.entries) {
       for (final item in (snapshot[entry.value] as List? ?? const [])) {
         final json = Map<String, dynamic>.from(item as Map);
-        final id = entry.key == 'd' || entry.key == 'x'
-            ? '${json['entity']}:${json['id']}'
-            : json['id'];
+        final id = switch (entry.key) {
+          'd' || 'x' => '${json['entity']}:${json['id']}',
+          'u' => json['sha256'],
+          _ => json['id'],
+        };
         upserts['${entry.key}:$id'] = json;
       }
     }

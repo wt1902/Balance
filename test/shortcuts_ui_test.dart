@@ -27,15 +27,17 @@ int selectedPage(WidgetTester tester) {
   if (bar.evaluate().isNotEmpty) {
     return tester.widget<NavigationBar>(bar).selectedIndex;
   }
-  return tester
+  // The rail lists the v2 sections before «Настройки».
+  const railPages = [0, 1, 2, 3, 5, 6, 7, 8, 4];
+  return railPages[tester
       .widget<NavigationRail>(find.byType(NavigationRail))
-      .selectedIndex!;
+      .selectedIndex!];
 }
 
 final search = find.byWidgetPredicate(
   (w) =>
       w is TextField &&
-      w.decoration?.hintText == 'Поиск по категории или заметке',
+      w.decoration?.hintText == 'Поиск по категории, заметке или тегу',
 );
 
 bool searchFocused(WidgetTester tester) =>
@@ -180,10 +182,10 @@ void main() {
     final env = await bootOn(tester, TargetPlatform.android, phone);
     final bar = find.byType(NavigationBar);
     await tester.tap(
-      find
-          .descendant(of: bar, matching: find.byIcon(Icons.settings_outlined))
-          .first,
+      find.descendant(of: bar, matching: find.byIcon(Icons.more_horiz)).first,
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(ListTile, 'Настройки'));
     await tester.pumpAndSettle();
     expect(selectedPage(tester), 4);
     await tester.dragUntilVisible(

@@ -3,7 +3,9 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/finance.dart';
 import '../domain/templates.dart';
+import '../services/app_store.dart';
 import 'design.dart';
+import 'v2_common.dart';
 
 const _uuid = Uuid();
 Future<T?> editDialog<T>(BuildContext context, Widget child) => showDialog<T>(
@@ -23,8 +25,17 @@ class TransactionEditor extends StatefulWidget {
     this.existing,
     this.draft,
     required this.categories,
+    this.store,
+    this.attachments,
   });
   final TransactionRecord? existing;
+
+  /// Accounts, currencies and known tags (contract v2); without it the
+  /// editor keeps those fields of [existing] unchanged.
+  final AppStore? store;
+
+  /// Attachments of [existing], shown under the form.
+  final Widget? attachments;
 
   /// Prefills a new transaction (repeat, template, app shortcut).
   final TransactionTemplate? draft;
@@ -39,6 +50,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
   late DateTime date;
   late String kind;
   late CategoryRecord selected;
+  late String? accountId = widget.existing?.accountId;
+  late String? currency = widget.existing?.currency;
+  late List<String> tags = widget.existing?.tags ?? const [];
   List<CategoryRecord> get choices {
     final list = [
       ...BuiltInCategories.forKind(kind),
@@ -178,6 +192,21 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     () => selected = choices.firstWhere((c) => c.name == v),
                   ),
           ),
+          if (widget.store case final store?) ...[
+            const SizedBox(height: 16),
+            AccountField(
+              store: store,
+              value: accountId,
+              onChanged: (v) => setState(() => accountId = v),
+            ),
+            const SizedBox(height: 16),
+            CurrencyField(
+              value: currency,
+              options: currencyOptions(store),
+              nullLabel: defaultCurrencyLabel(store, accountId),
+              onChanged: (v) => setState(() => currency = v),
+            ),
+          ],
           const SizedBox(height: 12),
           ListTile(
             contentPadding: EdgeInsets.zero,
@@ -219,6 +248,18 @@ class _TransactionEditorState extends State<TransactionEditor> {
               border: OutlineInputBorder(),
             ),
           ),
+          if (widget.store case final store?) ...[
+            const SizedBox(height: 4),
+            TagsField(
+              tags: tags,
+              suggestions: store.knownTags,
+              onChanged: (t) => setState(() => tags = t),
+            ),
+          ],
+          if (widget.attachments case final attachments?) ...[
+            const SizedBox(height: 16),
+            attachments,
+          ],
           const SizedBox(height: 16),
           Wrap(
             alignment: WrapAlignment.end,
@@ -234,22 +275,41 @@ class _TransactionEditorState extends State<TransactionEditor> {
                 onPressed: () {
                   if (!form.currentState!.validate()) return;
                   final now = DateTime.now();
+                  final existing = widget.existing;
+                  // Editing keeps fields this form does not show, including
+                  // payload fields of newer clients (contract v2 §0.2).
                   Navigator.pop(
                     context,
-                    TransactionRecord(
-                      id: widget.existing?.id ?? _uuid.v4(),
-                      amountMinor: parseAmount(amount.text)!,
-                      date: date,
-                      note: note.text.trim(),
-                      categoryName: selected.name,
-                      categoryIcon: selected.icon,
-                      categoryEmoji: selected.emoji,
-                      categoryColorName: selected.colorName,
-                      kindRawValue: kind,
-                      isBalanceAdjustment:
-                          widget.existing?.isBalanceAdjustment ?? false,
-                      updatedAt: now,
-                    ),
+                    existing?.copyWith(
+                          amountMinor: parseAmount(amount.text)!,
+                          date: date,
+                          note: note.text.trim(),
+                          categoryName: selected.name,
+                          categoryIcon: selected.icon,
+                          categoryEmoji: selected.emoji,
+                          categoryColorName: selected.colorName,
+                          kindRawValue: kind,
+                          accountId: accountId,
+                          currency: currency,
+                          tags: tags,
+                          updatedAt: now,
+                        ) ??
+                        TransactionRecord(
+                          id: widget.existing?.id ?? _uuid.v4(),
+                          amountMinor: parseAmount(amount.text)!,
+                          date: date,
+                          note: note.text.trim(),
+                          categoryName: selected.name,
+                          categoryIcon: selected.icon,
+                          categoryEmoji: selected.emoji,
+                          categoryColorName: selected.colorName,
+                          kindRawValue: kind,
+                          isBalanceAdjustment: false,
+                          accountId: accountId,
+                          currency: currency,
+                          tags: tags,
+                          updatedAt: now,
+                        ),
                   );
                 },
                 child: const Text('Сохранить'),

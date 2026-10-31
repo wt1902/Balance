@@ -4,7 +4,9 @@
 library;
 
 const backupFormat = 'balance-backup';
-const backupVersion = 1;
+
+/// 2: contract v2 entities (accounts, transfers, …); version 1 files still restore.
+const backupVersion = 2;
 
 /// Outcome of restoring a backup. Records are merged by last-write-wins on
 /// updatedAt, so nothing newer on the device is overwritten.

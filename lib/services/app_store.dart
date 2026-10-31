@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/widgets.dart';
@@ -8,9 +9,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
 import '../domain/backup.dart';
+import '../domain/currency.dart';
 import '../domain/finance.dart';
+import '../domain/records.dart';
+import '../domain/recurring.dart';
 import '../domain/templates.dart';
+import '../domain/transaction_filter.dart';
 import '../domain/appearance.dart';
+import 'attachment_cache.dart';
 import 'launch_actions.dart';
 import 'storage.dart';
 import 'runtime_lock.dart';
@@ -42,12 +48,23 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     SnapshotStorage? storage,
     FlutterSecureStorage? secureStorage,
     SyncApi Function(String serverUrl)? apiFactory,
+    AttachmentCache? attachmentCache,
+    DateTime Function()? clock,
     this.background = false,
   }) : _storage = storage,
        _injectedStorage = storage != null,
        _apiFactory = apiFactory,
+       _attachmentCache =
+           attachmentCache ??
+           (storage != null ? MemoryAttachmentCache() : null),
+       _clock = clock ?? DateTime.now,
        _secureStorage = secureStorage ?? const FlutterSecureStorage();
   SnapshotStorage? _storage;
+  AttachmentCache? _attachmentCache;
+
+  /// Calendar time for recurring operations and the rate date (§2, §4);
+  /// injectable so tests do not depend on the current date.
+  final DateTime Function() _clock;
   final bool background;
   final bool _injectedStorage;
   final RuntimeLock _runtimeLock = RuntimeLock();
@@ -78,6 +95,44 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   final Map<String, TransactionRecord> _transactions = {};
   final Map<String, CategoryRecord> _categories = {};
   final Map<String, BudgetRecord> _budgets = {};
+  final Map<String, AccountRecord> _accounts = {};
+  final Map<String, TransferRecord> _transfers = {};
+  final Map<String, RecurringRecord> _recurring = {};
+  final Map<String, GoalRecord> _goals = {};
+  final Map<String, DebtRecord> _debts = {};
+  final Map<String, RateRecord> _rates = {};
+  final Map<String, SettingRecord> _settings = {};
+  final Map<String, AttachmentRecord> _attachments = {};
+
+  /// Attachment files saved locally but not uploaded yet, by sha256:
+  /// `{sha256, contentType}`. Their records are pushed only after the PUT.
+  final Map<String, Map<String, dynamic>> _uploads = {};
+
+  /// Records of every entity by entity name (see [entityCodecs]).
+  late final Map<String, Map<String, SyncRecord>> _collections = {
+    'transaction': _transactions,
+    'category': _categories,
+    'budget': _budgets,
+    'account': _accounts,
+    'transfer': _transfers,
+    'recurring': _recurring,
+    'goal': _goals,
+    'debt': _debts,
+    'rate': _rates,
+    'setting': _settings,
+    'attachment': _attachments,
+  };
+
+  /// What the server supports; null until checked (see [refreshCapabilities]).
+  ServerCapabilities? capabilities;
+  DateTime? _capabilitiesCheckedAt;
+
+  /// Shared ledgers of the account (§7), as last listed by the server.
+  List<Ledger> ledgers = const [];
+  String? _ledgersSource;
+
+  /// The shared ledger in use; null for the personal one.
+  String? activeLedgerId;
   final Map<String, Map<String, dynamic>> _tombstones = {};
   final Map<String, Map<String, dynamic>> _dirty = {};
   final List<QuarantineEntry> _quarantine = [];
@@ -92,6 +147,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   String? _sessionCheckedRevision, _sessionCheckedServer;
   DateTime? _latestChangeAt;
   List<TransactionRecord>? _sortedTransactions;
+  BaseTransactions? _baseTransactions;
+  BaseAmount? _totalBalance;
 
   /// Objects as last written, by ledger record key. Records are immutable and
   /// replaced on change, so identity tells what a write must include.
@@ -108,11 +165,165 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   List<BudgetRecord> get budgets =>
       _budgets.values.toList()
         ..sort((a, b) => b.monthStart.compareTo(a.monthStart));
-  int get balanceMinor => _transactions.values.fold(
-    0,
-    (sum, t) =>
-        sum + (t.kindRawValue == 'income' ? t.amountMinor : -t.amountMinor),
+
+  /// By `sortOrder`, then name; archived accounts included.
+  List<AccountRecord> get accounts => _accounts.values.toList()
+    ..sort((a, b) {
+      final byOrder = a.sortOrder.compareTo(b.sortOrder);
+      return byOrder != 0 ? byOrder : a.name.compareTo(b.name);
+    });
+
+  /// Accounts offered for selection: archived ones are hidden (§3).
+  List<AccountRecord> get activeAccounts =>
+      accounts.where((a) => !a.isArchived).toList();
+  AccountRecord? account(String? id) => _accounts[id];
+
+  /// Newest first.
+  List<TransferRecord> get transfers =>
+      _transfers.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+  List<RecurringRecord> get recurring =>
+      _recurring.values.toList()
+        ..sort((a, b) => a.startDate.compareTo(b.startDate));
+  List<GoalRecord> get goals =>
+      _goals.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+  List<DebtRecord> get debts =>
+      _debts.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+
+  /// Newest first by date.
+  List<RateRecord> get rates =>
+      _rates.values.toList()..sort((a, b) => b.date.compareTo(a.date));
+  List<AttachmentRecord> attachmentsFor(String transactionId) =>
+      _attachments.values
+          .where((a) => a.transactionId == transactionId)
+          .toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+  /// True while the file of [attachment] waits for upload.
+  bool isUploadPending(AttachmentRecord attachment) =>
+      _uploads.containsKey(attachment.sha256);
+
+  /// The synchronized `baseCurrency` setting, else the device currency
+  /// (v1 behavior).
+  String get baseCurrency {
+    final value = _settings[SettingRecord.baseCurrencyKey]?.value;
+    return value is String && isCurrencyCode(value) ? value : currency;
+  }
+
+  /// Converter with the rates known now (latest rate on the calculation date).
+  CurrencyConverter get converter => CurrencyConverter(
+    baseCurrency: baseCurrency,
+    rates: _rates.values,
+    asOf: _clock(),
   );
+
+  /// Transactions in the base currency for analytics and budgets (§2–3);
+  /// amounts without a rate are left out. Identical to [transactions]
+  /// when everything is in one currency.
+  BaseTransactions get baseTransactions => _baseTransactions ??= () {
+    final converted = LedgerMath.inBase(
+      transactions: transactions,
+      accounts: _accounts,
+      converter: converter,
+    );
+    return BaseTransactions(
+      List.unmodifiable(converted.items),
+      converted.missingRates,
+    );
+  }();
+
+  /// Total balance in the base currency, with currency pairs that had no rate.
+  BaseAmount get totalBalance => _totalBalance ??= LedgerMath.totalBalance(
+    transactions: _transactions.values,
+    transfers: _transfers.values,
+    accounts: _accounts,
+    converter: converter,
+  );
+  int get balanceMinor => totalBalance.minor;
+
+  /// `C→B` pairs without a rate in the balance or analytics.
+  Set<String> get missingRates => {
+    ...totalBalance.missingRates,
+    ...baseTransactions.missingRates,
+  };
+
+  /// Balances by account id in each account's currency, including ids of
+  /// deleted accounts.
+  Map<String, int> get accountBalances =>
+      LedgerMath.accountBalances(_transactions.values, _transfers.values);
+
+  /// «Без счёта» by currency.
+  Map<String, int> get unassignedBalances =>
+      LedgerMath.unassignedBalances(_transactions.values, baseCurrency);
+  int goalProgress(GoalRecord goal) =>
+      LedgerMath.goalProgress(goal, accountBalances);
+  int goalRemaining(GoalRecord goal) =>
+      LedgerMath.goalRemaining(goal, accountBalances);
+
+  /// The currency of a goal: its own, else its account's, else the base.
+  String goalCurrency(GoalRecord goal) =>
+      goal.currency ??
+      LedgerMath.accountCurrency(goal.accountId, _accounts, baseCurrency);
+
+  /// The currency an amount of [item] is in (§2).
+  String transactionCurrency(TransactionRecord item) =>
+      LedgerMath.transactionCurrency(item, _accounts, baseCurrency);
+
+  /// An account's currency; a deleted or unknown account counts as base.
+  String accountCurrency(String? accountId) =>
+      LedgerMath.accountCurrency(accountId, _accounts, baseCurrency);
+
+  /// Tags used in operations, most used first, then alphabetically; one
+  /// spelling per tag regardless of case.
+  List<String> get knownTags => _knownTags ??= () {
+    final counts = <String, int>{};
+    final spelling = <String, String>{};
+    for (final item in _transactions.values) {
+      for (final tag in item.tags) {
+        final key = tag.toLowerCase();
+        spelling.putIfAbsent(key, () => tag);
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+    }
+    final keys = counts.keys.toList()
+      ..sort((a, b) {
+        final byCount = counts[b]!.compareTo(counts[a]!);
+        return byCount != 0 ? byCount : a.compareTo(b);
+      });
+    return List<String>.unmodifiable([for (final key in keys) spelling[key]!]);
+  }();
+  List<String>? _knownTags;
+
+  /// Currency codes known from the base, accounts, rates and operations.
+  Set<String> get knownCurrencies => {
+    baseCurrency,
+    currency,
+    for (final a in _accounts.values) ?a.currency,
+    for (final r in _rates.values) ...[r.from, r.to],
+    for (final t in _transactions.values) ?t.currency,
+  };
+
+  /// Income and expenses of [items] in the base currency, adjustments and
+  /// amounts without a rate left out (operations list totals).
+  FinanceSummary baseTotals(Iterable<TransactionRecord> items) {
+    final byId = _baseById ??= {
+      for (final item in baseTransactions.items) item.id: item,
+    };
+    return DayGroup.totals([for (final item in items) ?byId[item.id]]);
+  }
+
+  Map<String, TransactionRecord>? _baseById;
+
+  /// Occurrences of `remind` rules waiting for a decision, computed once
+  /// per change.
+  List<RecurringOccurrence> get pendingReminders =>
+      _pendingReminders ??= List.unmodifiable(pendingRecurring());
+  List<RecurringOccurrence>? _pendingReminders;
+
+  bool get supportsAttachments => capabilities?.attachments ?? false;
+  bool get supportsLedgers => capabilities?.ledgers ?? false;
+  Ledger? get activeLedger =>
+      ledgers.where((l) => l.id == activeLedgerId).firstOrNull;
   int get pendingChangeCount => _dirty.length;
 
   /// Device-local quick-entry presets, newest first.
@@ -148,6 +359,11 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
 
   void _notify() {
     _sortedTransactions = null;
+    _baseTransactions = null;
+    _totalBalance = null;
+    _baseById = null;
+    _knownTags = null;
+    _pendingReminders = null;
     if (!_disposed) notifyListeners();
   }
 
@@ -168,8 +384,15 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     await _preferences!.setString('deviceId', _deviceId);
     _loadTemplates();
     _storage ??= await LedgerStorage.open();
+    _attachmentCache ??= await AttachmentCache.open();
     await _restoreSession();
+    _loadServerState();
     await _loadScope();
+    // Without an account nothing is pulled first; with one, the first sync
+    // runs the rules after it pulled other devices' progress.
+    if (session == null && _generateRecurring(_clock()) > 0) {
+      await _persist();
+    }
     if (!background) {
       WidgetsBinding.instance.addObserver(this);
       _timer = Timer.periodic(const Duration(minutes: 2), (_) {
@@ -195,6 +418,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _deviceId = _preferences!.getString('deviceId') ?? _deviceId;
     _loadTemplates();
     await _restoreSession();
+    _loadServerState();
     final revision = _preferences!.getString('ledgerRevision');
     if (revision == null || revision != _ledgerRevision) {
       await _storage!.invalidate();
@@ -288,7 +512,51 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
 
   String get _credentialKey =>
       'balance.session.${Uri.encodeComponent(serverUrl)}';
-  String _scopeFor(String? userId) => '$serverUrl|${userId ?? 'guest'}';
+
+  /// Data scope: server + user + ledger (§7). The personal ledger keeps the
+  /// v1 key, so existing data stays where it was.
+  String _scopeFor(String? userId) {
+    final personal = '$serverUrl|${userId ?? 'guest'}';
+    final ledger = userId == null ? null : _savedLedger(userId);
+    return ledger == null ? personal : '$personal|ledger:$ledger';
+  }
+
+  String _ledgerPreference(String userId) => 'activeLedger.$serverUrl|$userId';
+  String? _savedLedger(String userId) =>
+      _preferences?.getString(_ledgerPreference(userId));
+
+  /// Capabilities and the ledger list cached per server and account.
+  void _loadServerState() {
+    final prefs = _preferences!;
+    try {
+      final raw = prefs.getString('capabilities.$serverUrl');
+      capabilities = raw == null
+          ? null
+          : ServerCapabilities.fromJson(
+              Map<String, dynamic>.from(jsonDecode(raw) as Map),
+            );
+    } catch (_) {
+      capabilities = null;
+    }
+    final user = session?.userId;
+    activeLedgerId = user == null ? null : _savedLedger(user);
+    final key = user == null ? null : 'ledgers.$serverUrl|$user';
+    final raw = key == null ? null : prefs.getString(key);
+    // Unchanged since loaded or saved here: keep the list with its members.
+    if ('$key=$raw' == _ledgersSource) return;
+    _ledgersSource = '$key=$raw';
+    try {
+      ledgers = raw == null
+          ? const []
+          : [
+              for (final item in jsonDecode(raw) as List)
+                Ledger.fromJson(Map<String, dynamic>.from(item as Map)),
+            ];
+    } catch (_) {
+      ledgers = const [];
+    }
+  }
+
   SyncApi? _apiInstance;
   SyncApi get _api => _apiInstance ??=
       _apiFactory?.call(serverUrl) ??
@@ -317,12 +585,18 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _scope = _scopeFor(session?.userId);
     _ledgerRevision = _preferences?.getString('ledgerRevision');
     _sortedTransactions = null;
+    _baseTransactions = null;
+    _totalBalance = null;
+    _baseById = null;
+    _knownTags = null;
+    _pendingReminders = null;
     _persisted.clear();
     _persistFull = true;
     final raw = await _storage!.read(_scope);
-    _transactions.clear();
-    _categories.clear();
-    _budgets.clear();
+    for (final collection in _collections.values) {
+      collection.clear();
+    }
+    _uploads.clear();
     _dirty.clear();
     _tombstones.clear();
     _cursor = 0;
@@ -353,17 +627,19 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
-    load('transactions', (json) {
-      final record = TransactionRecord.fromJson(json);
-      _transactions[record.id] = record;
-    });
-    load('categories', (json) {
-      final record = CategoryRecord.fromJson(json);
-      _categories[record.id] = record;
-    });
-    load('budgets', (json) {
-      final record = BudgetRecord.fromJson(json);
-      _budgets[record.id] = record;
+    for (final codec in entityCodecs.values) {
+      final target = _collections[codec.entity]!;
+      load(codec.section, (json) {
+        final record = codec.fromJson(json);
+        target[record.id] = record;
+      });
+    }
+    load('uploads', (json) {
+      final sha = json['sha256'];
+      if (sha is! String || !AttachmentRecord.isSha256(sha)) {
+        throw const FormatException('Неверный SHA-256');
+      }
+      _uploads[sha] = json;
     });
     load('dirty', (json) {
       _dirty[_key(_validChange(json))] = json;
@@ -397,11 +673,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
 
   Map<String, dynamic> _validChange(Map<String, dynamic> change) {
     final id = change['id'];
-    if (!const {
-          'transaction',
-          'category',
-          'budget',
-        }.contains(change['entity']) ||
+    if (!syncEntities.contains(change['entity']) ||
         id is! String ||
         id.isEmpty ||
         change['deleted'] is! bool ||
@@ -476,18 +748,21 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   });
 
   Map<String, dynamic> _snapshot() => {
-    'transactions': _transactions.values.map((e) => e.toJson()).toList(),
-    'categories': _categories.values.map((e) => e.toJson()).toList(),
-    'budgets': _budgets.values.map((e) => e.toJson()).toList(),
+    for (final codec in entityCodecs.values)
+      codec.section: _collections[codec.entity]!.values
+          .map((e) => e.toJson())
+          .toList(),
+    'uploads': _uploads.values.toList(),
     'dirty': _dirty.values.toList(),
     'tombstones': _tombstones.values.toList(),
     'cursor': _cursor,
     'lastSyncAt': lastSyncAt?.toUtc().toIso8601String(),
   };
   Map<String, Object> _ledgerObjects() => {
-    for (final e in _transactions.entries) 't:${e.key}': e.value,
-    for (final e in _categories.entries) 'c:${e.key}': e.value,
-    for (final e in _budgets.entries) 'b:${e.key}': e.value,
+    for (final codec in entityCodecs.values)
+      for (final e in _collections[codec.entity]!.entries)
+        '${codec.prefix}:${e.key}': e.value,
+    for (final e in _uploads.entries) 'u:${e.key}': e.value,
     for (final e in _dirty.entries) 'd:${e.key}': e.value,
     for (final e in _tombstones.entries) 'x:${e.key}': e.value,
   };
@@ -501,9 +776,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     for (final entry in current.entries) {
       if (!full && identical(_persisted[entry.key], entry.value)) continue;
       upserts[entry.key] = switch (entry.value) {
-        final TransactionRecord r => r.toJson(),
-        final CategoryRecord r => r.toJson(),
-        final BudgetRecord r => r.toJson(),
+        final SyncRecord r => r.toJson(),
         final value => value as Map<String, dynamic>,
       };
     }
@@ -604,25 +877,112 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _notify();
   }
 
+  /// Puts [record] with a fresh `updatedAt` and queues it for sync.
+  T _put<T extends SyncRecord>(String entity, T record, {DateTime? at}) {
+    final saved = record.stamped(at ?? _now()) as T;
+    _collections[entity]![saved.id] = saved;
+    _queueChange(_change(entity, saved.id, saved.updatedAt, saved.payload()));
+    return saved;
+  }
+
+  void _check(bool valid, String message) {
+    if (!valid) throw ArgumentError(message);
+  }
+
+  /// Rules shared by saving and restoring a record. Returns the record in
+  /// its normalized form; throws [ArgumentError] when it is not valid.
+  SyncRecord _validated(SyncRecord record) {
+    switch (record) {
+      case TransactionRecord r:
+        _check(r.amountMinor > 0, 'Сумма должна быть больше нуля');
+        _check(
+          r.currency == null || isCurrencyCode(r.currency!),
+          'Неверный код валюты',
+        );
+        return r.copyWith(tags: TagRules.validate(r.tags));
+      case AccountRecord r:
+        _check(r.name.trim().isNotEmpty, 'Введите название счёта');
+        _check(
+          r.currency == null || isCurrencyCode(r.currency!),
+          'Неверный код валюты',
+        );
+        return r.copyWith(name: r.name.trim());
+      case TransferRecord r:
+        _check(
+          r.fromAccountId.isNotEmpty && r.toAccountId.isNotEmpty,
+          'Выберите оба счёта',
+        );
+        _check(r.fromAccountId != r.toAccountId, 'Счета должны различаться');
+        _check(
+          r.amountMinor > 0 && r.toAmountMinor > 0,
+          'Сумма должна быть больше нуля',
+        );
+        return r;
+      case RecurringRecord r:
+        _check(r.amountMinor > 0, 'Сумма должна быть больше нуля');
+        _check(r.categoryName.trim().isNotEmpty, 'Выберите категорию');
+        _check(r.frequency != null, 'Неизвестная периодичность');
+        _check(r.interval >= 1, 'Интервал — не меньше 1');
+        _check(r.mode != null, 'Неизвестный режим');
+        _check(
+          r.endDate == null || !r.endDate!.isBefore(r.startDate),
+          'Дата окончания раньше начала',
+        );
+        _check(
+          r.currency == null || isCurrencyCode(r.currency!),
+          'Неверный код валюты',
+        );
+        return r.copyWith(tags: TagRules.validate(r.tags));
+      case GoalRecord r:
+        _check(r.name.trim().isNotEmpty, 'Введите название цели');
+        _check(r.targetMinor > 0, 'Цель должна быть больше нуля');
+        _check(r.savedMinor >= 0, 'Накоплено не может быть меньше нуля');
+        return r.copyWith(name: r.name.trim());
+      case DebtRecord r:
+        _check(r.person.trim().isNotEmpty, 'Укажите, кто должен');
+        _check(r.amountMinor > 0, 'Сумма должна быть больше нуля');
+        _check(r.repaidMinor >= 0, 'Возвращено не может быть меньше нуля');
+        _check(r.direction != null, 'Неизвестное направление долга');
+        return r.copyWith(person: r.person.trim());
+      case RateRecord r:
+        _check(
+          isCurrencyCode(r.from) && isCurrencyCode(r.to),
+          'Неверный код валюты',
+        );
+        _check(r.from != r.to, 'Валюты должны различаться');
+        return r;
+      case AttachmentRecord r:
+        _check(AttachmentRecord.isSha256(r.sha256), 'Неверный SHA-256');
+        _check(r.transactionId.isNotEmpty, 'Нет операции');
+        _check(r.size >= 0, 'Неверный размер');
+        return r;
+      default:
+        return record;
+    }
+  }
+
   Future<void> saveTransaction(TransactionRecord record) =>
       _exclusive(() async {
-        if (record.amountMinor <= 0) {
-          throw ArgumentError('Сумма должна быть больше нуля');
-        }
-        final saved = record.copyWith(updatedAt: _now());
-        _transactions[saved.id] = saved;
-        _queueChange(
-          _change('transaction', saved.id, saved.updatedAt, saved.payload()),
-        );
+        _put('transaction', _validated(record) as TransactionRecord);
         await _edited();
       });
   Future<void> deleteTransaction(String id) => _delete('transaction', id);
   Future<void> deleteBudget(String id) => _delete('budget', id);
   Future<void> deleteCategory(String id) => _delete('category', id);
+
+  /// Transactions and transfers of a deleted account stay (§3).
+  Future<void> deleteAccount(String id) => _delete('account', id);
+  Future<void> deleteTransfer(String id) => _delete('transfer', id);
+
+  /// Transactions the rule already created stay.
+  Future<void> deleteRecurring(String id) => _delete('recurring', id);
+  Future<void> deleteGoal(String id) => _delete('goal', id);
+  Future<void> deleteDebt(String id) => _delete('debt', id);
+  Future<void> deleteRate(String id) => _delete('rate', id);
+  Future<void> deleteAttachment(String id) => _delete('attachment', id);
   Future<void> _delete(String entity, String id) => _exclusive(() async {
-    if (entity == 'transaction') _transactions.remove(id);
     if (entity == 'category') {
-      final category = _categories.remove(id);
+      final category = _categories[id];
       if (category != null && category.kindRawValue == 'expense') {
         for (final budget
             in _budgets.values
@@ -633,10 +993,34 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     }
-    if (entity == 'budget') _budgets.remove(id);
+    if (entity == 'transaction') {
+      for (final attachment
+          in _attachments.values.where((a) => a.transactionId == id).toList()) {
+        _removeAttachment(attachment);
+      }
+    }
+    if (entity == 'attachment') {
+      final attachment = _attachments[id];
+      if (attachment != null) {
+        _removeAttachment(attachment);
+        await _edited();
+        return;
+      }
+    }
+    _collections[entity]!.remove(id);
     _queueChange(_change(entity, id, _now(), null));
     await _edited();
   });
+
+  /// A file never uploaded is not uploaded after its record is gone. The
+  /// local copy stays: another ledger may use the same file.
+  void _removeAttachment(AttachmentRecord attachment) {
+    _attachments.remove(attachment.id);
+    _queueChange(_change('attachment', attachment.id, _now(), null));
+    if (!_attachments.values.any((a) => a.sha256 == attachment.sha256)) {
+      _uploads.remove(attachment.sha256);
+    }
+  }
 
   Future<void> saveCategory(CategoryRecord record) => _exclusive(() async {
     if (record.name.trim().isEmpty) {
@@ -687,6 +1071,23 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
           _change('budget', budget.id, changed.updatedAt, changed.payload()),
         );
       }
+      // Recurring rules carry the same category snapshot as transactions.
+      for (final rule in _recurring.values.toList()) {
+        if (rule.categoryName != previous.name ||
+            rule.kindRawValue != previous.kindRawValue) {
+          continue;
+        }
+        _put(
+          'recurring',
+          rule.copyWith(
+            categoryName: saved.name,
+            categoryIcon: saved.icon,
+            categoryEmoji: saved.emoji,
+            categoryColorName: saved.colorName,
+          ),
+          at: saved.updatedAt,
+        );
+      }
     }
     await _edited();
   });
@@ -710,37 +1111,281 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _queueChange(_change('budget', saved.id, saved.updatedAt, saved.payload()));
     await _edited();
   });
-  Future<void> adjustBalance(int targetMinor, {String note = ''}) =>
+
+  /// Creates an adjustment so the total balance — or, with [accountId], that
+  /// account's balance in its currency — becomes [targetMinor].
+  Future<void> adjustBalance(
+    int targetMinor, {
+    String note = '',
+    String? accountId,
+  }) => _exclusive(() async {
+    final current = accountId == null
+        ? balanceMinor
+        : accountBalances[accountId] ?? 0;
+    final delta = targetMinor - current;
+    if (delta == 0) return;
+    final now = _now();
+    final record = TransactionRecord(
+      id: newId(),
+      amountMinor: delta.abs(),
+      date: now,
+      categoryName: 'Корректировка',
+      updatedAt: now,
+      note: note.isEmpty ? 'Ручная корректировка баланса' : note,
+      isBalanceAdjustment: true,
+      kindRawValue: delta > 0 ? 'income' : 'expense',
+      accountId: accountId,
+    );
+    _transactions[record.id] = record;
+    _queueChange(_change('transaction', record.id, now, record.payload()));
+    await _edited();
+  });
+
+  Future<void> saveAccount(AccountRecord record) => _exclusive(() async {
+    _put('account', _validated(record) as AccountRecord);
+    await _edited();
+  });
+
+  Future<void> saveTransfer(TransferRecord record) => _exclusive(() async {
+    _put('transfer', _validated(record) as TransferRecord);
+    await _edited();
+  });
+
+  Future<void> saveGoal(GoalRecord record) => _exclusive(() async {
+    _put('goal', _validated(record) as GoalRecord);
+    await _edited();
+  });
+
+  Future<void> saveDebt(DebtRecord record) => _exclusive(() async {
+    _put('debt', _validated(record) as DebtRecord);
+    await _edited();
+  });
+
+  Future<void> saveRate(RateRecord record) => _exclusive(() async {
+    _put('rate', _validated(record) as RateRecord);
+    await _edited();
+  });
+
+  /// Saves the rule and, in `auto` mode, creates its occurrences due by now.
+  Future<void> saveRecurring(RecurringRecord record) => _exclusive(() async {
+    _put('recurring', _validated(record) as RecurringRecord);
+    _generateRecurring(_clock(), only: record.id);
+    await _edited();
+  });
+
+  /// Synchronized base currency (§1 setting); null returns to the device
+  /// currency.
+  Future<void> setBaseCurrency(String? code) => _exclusive(() async {
+    const key = SettingRecord.baseCurrencyKey;
+    if (code == null) {
+      if (_settings.remove(key) == null) return;
+      _queueChange(_change('setting', key, _now(), null));
+    } else {
+      final normalized = code.trim().toUpperCase();
+      _check(isCurrencyCode(normalized), 'Неверный код валюты');
+      final current = _settings[key];
+      _put(
+        'setting',
+        current?.copyWith(value: normalized) ??
+            SettingRecord(id: key, value: normalized, updatedAt: _now()),
+      );
+    }
+    await _edited();
+  });
+
+  /// Creates transactions of `auto` rules due by [now] (the clock by
+  /// default) and returns how many were created.
+  Future<int> generateRecurring({DateTime? now}) => _exclusive(() async {
+    final created = _generateRecurring(now ?? _clock());
+    if (created > 0) await _edited();
+    return created;
+  });
+
+  /// Creates the due occurrences of `auto` rules (§4) and moves each rule's
+  /// `generatedThrough` to the last processed one. An id already known —
+  /// created by another device or deleted by the user — is not created again.
+  int _generateRecurring(DateTime now, {String? only}) {
+    var created = 0;
+    for (final rule in _recurring.values.toList()) {
+      if (only != null && rule.id != only) continue;
+      if (rule.mode != RecurringMode.auto || rule.amountMinor <= 0) continue;
+      final due = RecurringEngine.due(rule, now);
+      if (due.isEmpty) continue;
+      for (final occurrence in due) {
+        if (knowsTransaction(occurrence.transactionId)) continue;
+        _put('transaction', occurrence.toTransaction(_now()));
+        created++;
+      }
+      _put('recurring', rule.copyWith(generatedThrough: due.last.occurrence));
+    }
+    return created;
+  }
+
+  /// Occurrences of `remind` rules waiting for «Записать» or «Пропустить»,
+  /// oldest first.
+  List<RecurringOccurrence> pendingRecurring({DateTime? now}) => [
+    for (final rule in recurring)
+      if (rule.mode == RecurringMode.remind)
+        for (final occurrence in RecurringEngine.due(rule, now ?? _clock()))
+          if (!knowsTransaction(occurrence.transactionId)) occurrence,
+  ];
+
+  RecurringOccurrence _dueOccurrence(
+    String recurringId,
+    String occurrence,
+    DateTime now,
+  ) {
+    final rule = _recurring[recurringId];
+    if (rule == null) throw ArgumentError('Регулярная операция не найдена');
+    final match = RecurringEngine.due(
+      rule,
+      now,
+    ).where((o) => o.occurrence == occurrence).firstOrNull;
+    if (match == null) throw ArgumentError('Повторение не ожидает решения');
+    return match;
+  }
+
+  /// «Записать»: creates the occurrence's transaction with its deterministic
+  /// id. [edit] may change the amount, date or note before it is saved.
+  Future<TransactionRecord> confirmRecurring(
+    String recurringId,
+    String occurrence, {
+    TransactionRecord Function(TransactionRecord)? edit,
+    DateTime? now,
+  }) => _exclusive(() async {
+    final at = now ?? _clock();
+    final due = _dueOccurrence(recurringId, occurrence, at);
+    if (knowsTransaction(due.transactionId)) {
+      throw ArgumentError('Повторение уже записано');
+    }
+    var record = due.toTransaction(_now());
+    if (edit != null) record = edit(record).copyWith(id: record.id);
+    final saved = _put('transaction', _validated(record) as TransactionRecord);
+    _advanceReminder(recurringId, at);
+    await _edited();
+    return saved;
+  });
+
+  /// «Пропустить»: moves `generatedThrough` to [occurrence], so it and any
+  /// earlier waiting occurrence are no longer offered.
+  Future<void> skipRecurring(
+    String recurringId,
+    String occurrence, {
+    DateTime? now,
+  }) => _exclusive(() async {
+    final at = now ?? _clock();
+    _dueOccurrence(recurringId, occurrence, at);
+    _put(
+      'recurring',
+      _recurring[recurringId]!.copyWith(generatedThrough: occurrence),
+    );
+    _advanceReminder(recurringId, at);
+    await _edited();
+  });
+
+  /// Moves `generatedThrough` over occurrences already recorded, so it
+  /// always marks the end of a fully handled prefix.
+  void _advanceReminder(String recurringId, DateTime now) {
+    final rule = _recurring[recurringId]!;
+    String? through;
+    for (final occurrence in RecurringEngine.due(rule, now)) {
+      if (!knowsTransaction(occurrence.transactionId)) break;
+      through = occurrence.occurrence;
+    }
+    if (through != null) {
+      _put('recurring', rule.copyWith(generatedThrough: through));
+    }
+  }
+
+  /// Default limits of §0 capabilities until the server reports its own.
+  static const attachmentTypes = {
+    'image/jpeg',
+    'image/png',
+    'image/heic',
+    'application/pdf',
+  };
+  static const attachmentMaxBytes = 10485760;
+
+  /// Saves the file locally and its record; the bytes are uploaded on the
+  /// next sync before the record is pushed (§8).
+  Future<AttachmentRecord> addAttachment({
+    required String transactionId,
+    required Uint8List bytes,
+    required String contentType,
+    String name = '',
+  }) => _exclusive(() async {
+    if (!_transactions.containsKey(transactionId)) {
+      throw ArgumentError('Операция не найдена');
+    }
+    final caps = capabilities;
+    final types = caps != null && caps.attachments
+        ? caps.attachmentTypes
+        : attachmentTypes;
+    final maxBytes = caps != null && caps.attachments
+        ? caps.attachmentMaxBytes
+        : attachmentMaxBytes;
+    final type = contentType.split(';').first.trim().toLowerCase();
+    _check(types.contains(type), 'Такой тип файла не поддерживается');
+    _check(bytes.isNotEmpty, 'Пустой файл');
+    _check(bytes.length <= maxBytes, 'Файл больше допустимого размера');
+    final sha = AttachmentCache.hash(bytes);
+    await _attachmentCache!.write(sha, bytes);
+    final now = _now();
+    final record = _put(
+      'attachment',
+      AttachmentRecord(
+        id: newId(),
+        transactionId: transactionId,
+        sha256: sha,
+        contentType: type,
+        size: bytes.length,
+        name: name,
+        createdAt: now,
+        updatedAt: now,
+      ),
+      at: now,
+    );
+    _uploads[sha] = {'sha256': sha, 'contentType': type};
+    await _edited();
+    return record;
+  });
+
+  /// The file of [attachment]: from the device, else downloaded from the
+  /// active ledger and kept (§8).
+  Future<Uint8List> attachmentBytes(AttachmentRecord attachment) =>
       _exclusive(() async {
-        final delta = targetMinor - balanceMinor;
-        if (delta == 0) return;
-        final now = _now();
-        final record = TransactionRecord(
-          id: newId(),
-          amountMinor: delta.abs(),
-          date: now,
-          categoryName: 'Корректировка',
-          updatedAt: now,
-          note: note.isEmpty ? 'Ручная корректировка баланса' : note,
-          isBalanceAdjustment: true,
-          kindRawValue: delta > 0 ? 'income' : 'expense',
+        final cached = await _attachmentCache!.read(attachment.sha256);
+        if (cached != null) return cached;
+        if (session == null) {
+          throw StateError('Файл ещё не загружен на это устройство');
+        }
+        final file = await _authorized(
+          (token) => _api.downloadAttachment(
+            accessToken: token,
+            sha256: attachment.sha256,
+            ledgerId: activeLedgerId,
+          ),
         );
-        _transactions[record.id] = record;
-        _queueChange(_change('transaction', record.id, now, record.payload()));
-        await _edited();
+        if (AttachmentCache.hash(file.bytes) != attachment.sha256) {
+          throw const FormatException('Файл повреждён: SHA-256 не совпадает');
+        }
+        await _attachmentCache!.write(attachment.sha256, file.bytes);
+        return file.bytes;
       });
 
-  /// Lossless copy of the current account's records, including deletions.
-  /// Sync state (queue, cursor) is per device and deliberately not included.
+  /// Lossless copy of the current ledger's records, including deletions.
+  /// Sync state (queue, cursor, pending uploads) is per device and
+  /// deliberately not included; attachment files are not either.
   Future<Map<String, dynamic>> exportBackup() => _exclusive(
     () async => {
       'format': backupFormat,
       'version': backupVersion,
       'exportedAt': DateTime.now().toUtc().toIso8601String(),
       'data': {
-        'transactions': _transactions.values.map((e) => e.toJson()).toList(),
-        'categories': _categories.values.map((e) => e.toJson()).toList(),
-        'budgets': _budgets.values.map((e) => e.toJson()).toList(),
+        for (final codec in entityCodecs.values)
+          codec.section: _collections[codec.entity]!.values
+              .map((e) => e.toJson())
+              .toList(),
         'tombstones': _tombstones.values.toList(),
       },
     },
@@ -749,31 +1394,29 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   /// Dry run of [restoreBackup]: what each record would do, without changes.
   Future<BackupPlan> previewBackup(Object? decoded) => _exclusive(() async {
     final data = backupData(decoded);
-    final transactions = Map.of(_transactions);
-    final categories = Map.of(_categories);
-    final budgets = Map.of(_budgets);
+    final collections = {
+      for (final entry in _collections.entries) entry.key: Map.of(entry.value),
+    };
     final dirty = Map.of(_dirty);
     final tombstones = Map.of(_tombstones);
+    final latest = _latestChangeAt;
     final plan = <BackupPlanItem>[];
     final BackupRestoreResult result;
     try {
       result = _restoreRecords(data, plan: plan);
     } finally {
-      _transactions
-        ..clear()
-        ..addAll(transactions);
-      _categories
-        ..clear()
-        ..addAll(categories);
-      _budgets
-        ..clear()
-        ..addAll(budgets);
+      for (final entry in collections.entries) {
+        // Copied entry by entry: each map keeps its own record type.
+        final target = _collections[entry.key]!..clear();
+        entry.value.forEach((id, record) => target[id] = record);
+      }
       _dirty
         ..clear()
         ..addAll(dirty);
       _tombstones
         ..clear()
         ..addAll(tombstones);
+      _latestChangeAt = latest;
     }
     return BackupPlan(
       plan,
@@ -796,6 +1439,32 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     if (result.changed > 0) await _edited();
     return result;
   });
+
+  /// Why a restored record would duplicate another one, or null.
+  String? _duplicate(SyncRecord record) => switch (record) {
+    CategoryRecord r =>
+      _categories.values.any(
+            (c) =>
+                c.id != r.id &&
+                c.name == r.name &&
+                c.kindRawValue == r.kindRawValue,
+          )
+          ? 'Категория с таким названием уже есть'
+          : null,
+    BudgetRecord r => () {
+      final month = r.monthStart.toLocal();
+      return _budgets.values.any(
+            (b) =>
+                b.id != r.id &&
+                b.categoryName == r.categoryName &&
+                b.monthStart.toLocal().year == month.year &&
+                b.monthStart.toLocal().month == month.month,
+          )
+          ? 'Бюджет на этот месяц уже есть'
+          : null;
+    }(),
+    _ => null,
+  };
 
   BackupRestoreResult _restoreRecords(
     Map<String, dynamic> data, {
@@ -829,40 +1498,52 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
           : 'На устройстве та же или более новая версия';
     }
 
-    void restore<T extends Object>(
-      String section,
-      String entity,
-      T Function(Map<String, dynamic>) parse,
-      String Function(T) id,
-      DateTime Function(T) updatedAt,
-      String? Function(T) duplicate,
-      Map<String, T> target,
-      Map<String, dynamic> Function(T) payload,
-    ) {
-      for (final json in items(section)) {
-        final T record;
+    // Categories, budgets and transactions keep the v1 order; v2 entities
+    // follow, settings and rates first.
+    const order = [
+      'category',
+      'budget',
+      'transaction',
+      'setting',
+      'rate',
+      'account',
+      'transfer',
+      'recurring',
+      'goal',
+      'debt',
+      'attachment',
+    ];
+    for (final entity in order) {
+      final codec = entityCodecs[entity]!;
+      final target = _collections[entity]!;
+      for (final json in items(codec.section)) {
+        final SyncRecord record;
         try {
-          record = parse(json);
+          final parsed = codec.fromJson(json);
+          if (parsed is CategoryRecord && parsed.name.trim().isEmpty) {
+            throw const FormatException('Пустое название');
+          }
+          if (parsed is BudgetRecord && parsed.limitMinor <= 0) {
+            throw const FormatException('Лимит должен быть больше нуля');
+          }
+          // Validation may normalize; the backup's updatedAt is kept.
+          record = _validated(parsed).stamped(parsed.updatedAt);
         } catch (_) {
           result.invalid++;
           continue;
         }
-        final key = '$entity:${id(record)}';
-        final local = target[id(record)];
+        final key = '$entity:${record.id}';
+        final local = target[record.id];
         final reason =
-            older(
-              key,
-              local == null ? null : updatedAt(local),
-              updatedAt(record),
-            ) ??
-            duplicate(record);
+            older(key, local?.updatedAt, record.updatedAt) ??
+            _duplicate(record);
         if (reason != null || (only != null && !only.contains(key))) {
           result.skipped++;
           if (reason != null) {
             plan?.add(
               BackupPlanItem(
                 entity: entity,
-                id: id(record),
+                id: record.id,
                 action: BackupAction.skip,
                 record: record,
                 reason: reason,
@@ -871,89 +1552,21 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
           }
           continue;
         }
-        target[id(record)] = record;
+        target[record.id] = record;
         _queueChange(
-          _change(entity, id(record), updatedAt(record), payload(record)),
+          _change(entity, record.id, record.updatedAt, record.payload()),
         );
         local == null ? result.added++ : result.updated++;
         plan?.add(
           BackupPlanItem(
             entity: entity,
-            id: id(record),
+            id: record.id,
             action: local == null ? BackupAction.add : BackupAction.update,
             record: record,
           ),
         );
       }
     }
-
-    restore<CategoryRecord>(
-      'categories',
-      'category',
-      (json) {
-        final record = CategoryRecord.fromJson(json);
-        if (record.name.trim().isEmpty) {
-          throw const FormatException('Пустое название');
-        }
-        return record;
-      },
-      (r) => r.id,
-      (r) => r.updatedAt,
-      (r) =>
-          _categories.values.any(
-            (c) =>
-                c.id != r.id &&
-                c.name == r.name &&
-                c.kindRawValue == r.kindRawValue,
-          )
-          ? 'Категория с таким названием уже есть'
-          : null,
-      _categories,
-      (r) => r.payload(),
-    );
-    restore<BudgetRecord>(
-      'budgets',
-      'budget',
-      (json) {
-        final record = BudgetRecord.fromJson(json);
-        if (record.limitMinor <= 0) {
-          throw const FormatException('Лимит должен быть больше нуля');
-        }
-        return record;
-      },
-      (r) => r.id,
-      (r) => r.updatedAt,
-      (r) {
-        final month = r.monthStart.toLocal();
-        return _budgets.values.any(
-              (b) =>
-                  b.id != r.id &&
-                  b.categoryName == r.categoryName &&
-                  b.monthStart.toLocal().year == month.year &&
-                  b.monthStart.toLocal().month == month.month,
-            )
-            ? 'Бюджет на этот месяц уже есть'
-            : null;
-      },
-      _budgets,
-      (r) => r.payload(),
-    );
-    restore<TransactionRecord>(
-      'transactions',
-      'transaction',
-      (json) {
-        final record = TransactionRecord.fromJson(json);
-        if (record.amountMinor <= 0) {
-          throw const FormatException('Сумма должна быть больше нуля');
-        }
-        return record;
-      },
-      (r) => r.id,
-      (r) => r.updatedAt,
-      (_) => null,
-      _transactions,
-      (r) => r.payload(),
-    );
     for (final json in items('tombstones')) {
       try {
         final change = _validChange(json);
@@ -963,18 +1576,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         final entity = change['entity'] as String;
         final id = change['id'] as String;
         final at = DateTime.parse(change['updatedAt'] as String);
-        final target = switch (entity) {
-          'transaction' => _transactions,
-          'category' => _categories,
-          _ => _budgets,
-        };
+        final target = _collections[entity]!;
         final local = target[id];
-        final localAt = switch (local) {
-          TransactionRecord r => r.updatedAt,
-          CategoryRecord r => r.updatedAt,
-          BudgetRecord r => r.updatedAt,
-          _ => null,
-        };
+        final localAt = local?.updatedAt;
         // A deletion of a record this device never had changes nothing.
         if (localAt == null) {
           result.skipped++;
@@ -1080,10 +1684,11 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     if (_preferences == null) return;
     try {
       final next = widgetSummary(
-        transactions: _transactions.values,
+        transactions: baseTransactions.items,
         budgets: _budgets.values,
-        currency: currency,
+        currency: baseCurrency,
         now: DateTime.now(),
+        balanceMinor: balanceMinor,
       );
       if (mapEquals(next, _widgetSummary)) return;
       for (final entry in next.entries) {
@@ -1153,6 +1758,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     await _preferences!.setString('serverUrl', normalized);
     // Credentials are deliberately not restored when switching servers.
     await _deleteCredentials();
+    _capabilitiesCheckedAt = null;
+    _loadServerState();
     if (unconfiguredGuest != null &&
         await _storage!.read(_scopeFor(null)) == null) {
       await _writeSnapshot(_scopeFor(null), unconfiguredGuest);
@@ -1176,6 +1783,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         ? await _api.register(email, password)
         : await _api.login(email, password);
     final nextSession = AuthSession(response);
+    // A sign-in starts in the personal ledger, where guest records go.
+    await _preferences!.remove(_ledgerPreference(nextSession.userId));
     final nextScope = _scopeFor(nextSession.userId);
     final exists = await _storage!.read(nextScope);
     final marker = 'importedGuest.$serverUrl';
@@ -1187,21 +1796,15 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         : null;
     session = nextSession;
     await _saveCredentials(response);
+    _loadServerState();
+    _capabilitiesCheckedAt = null;
     await _loadScope();
     if (guest != null) {
       await _writeSnapshot(_scope, guest);
       await _loadScope();
       _cursor = 0;
       // Imported rows may have been synced under another prior guest snapshot.
-      for (final t in _transactions.values) {
-        _queueChange(_change('transaction', t.id, t.updatedAt, t.payload()));
-      }
-      for (final c in _categories.values) {
-        _queueChange(_change('category', c.id, c.updatedAt, c.payload()));
-      }
-      for (final b in _budgets.values) {
-        _queueChange(_change('budget', b.id, b.updatedAt, b.payload()));
-      }
+      _queueAllRecords();
       await _persist();
       await _preferences!.setBool(marker, true);
     }
@@ -1214,6 +1817,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     // Local logout succeeds even if the network is unavailable.
     session = null;
     await _deleteCredentials();
+    _loadServerState();
     await _loadScope();
     error = null;
     syncMessage = null;
@@ -1241,23 +1845,103 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> sync() => _exclusive(_syncLocked);
+  void _queueAllRecords() {
+    for (final entry in _collections.entries) {
+      for (final r in entry.value.values) {
+        _queueChange(_change(entry.key, r.id, r.updatedAt, r.payload()));
+      }
+    }
+  }
+
   Future<void> resetAndSync() => _exclusive(() async {
     _cursor = 0;
-    for (final t in _transactions.values) {
-      _queueChange(_change('transaction', t.id, t.updatedAt, t.payload()));
-    }
-    for (final c in _categories.values) {
-      _queueChange(_change('category', c.id, c.updatedAt, c.payload()));
-    }
-    for (final b in _budgets.values) {
-      _queueChange(_change('budget', b.id, b.updatedAt, b.payload()));
-    }
+    _queueAllRecords();
     for (final tombstone in _tombstones.values.toList()) {
       _queueChange(tombstone);
     }
     await _persist();
     await _syncLocked();
   });
+
+  /// Runs [call] with a valid access token, refreshing once after a 401.
+  Future<T> _authorized<T>(Future<T> Function(String token) call) async {
+    try {
+      return await call(await _accessToken());
+    } on SyncApiException catch (e) {
+      if (e.statusCode != 401) rethrow;
+      return call(await _accessToken(force: true));
+    }
+  }
+
+  /// Asks the server what it supports (§0). A server without the route is
+  /// v1. A failed check keeps the last known answer (v1 if none): records the
+  /// server may not know then simply wait in the queue.
+  Future<ServerCapabilities> refreshCapabilities({bool force = false}) =>
+      _exclusive(() => _refreshCapabilities(force: force));
+
+  Future<ServerCapabilities> _refreshCapabilities({bool force = false}) async {
+    final checked = _capabilitiesCheckedAt;
+    if (!force &&
+        capabilities != null &&
+        checked != null &&
+        DateTime.now().difference(checked) < const Duration(minutes: 10)) {
+      return capabilities!;
+    }
+    try {
+      final next = await _api.capabilities();
+      capabilities = next;
+      _capabilitiesCheckedAt = DateTime.now();
+      await _preferences!.setString(
+        'capabilities.$serverUrl',
+        jsonEncode(next.toJson()),
+      );
+    } catch (_) {
+      // Unknown until the next successful check.
+    }
+    return capabilities ?? ServerCapabilities.v1;
+  }
+
+  /// Uploads files of new attachments before their records are pushed. A
+  /// file lost from the device cannot be uploaded; its record is removed.
+  Future<void> _uploadPending(ServerCapabilities caps) async {
+    if (!caps.attachments || _uploads.isEmpty) return;
+    for (final upload in _uploads.values.toList()) {
+      final sha = upload['sha256'] as String;
+      final bytes = await _attachmentCache!.read(sha);
+      if (bytes == null) {
+        for (final attachment
+            in _attachments.values.where((a) => a.sha256 == sha).toList()) {
+          _removeAttachment(attachment);
+        }
+        _uploads.remove(sha);
+        continue;
+      }
+      await _authorized(
+        (token) => _api.uploadAttachment(
+          accessToken: token,
+          sha256: sha,
+          bytes: bytes,
+          contentType: upload['contentType'] as String,
+          ledgerId: activeLedgerId,
+        ),
+      );
+      _uploads.remove(sha);
+      await _persist();
+    }
+  }
+
+  /// A queued change the server can take now: its entity is supported and,
+  /// for an attachment, its file is already uploaded.
+  bool _sendable(Map<String, dynamic> change, ServerCapabilities caps) {
+    final entity = change['entity'] as String;
+    if (!caps.entities.contains(entity)) return false;
+    if (entity == 'attachment' && change['deleted'] != true) {
+      final sha = (change['payload'] as Map)['sha256'];
+      return !_uploads.containsKey(sha);
+    }
+    return true;
+  }
+
   Future<void> _syncLocked() async {
     if (session == null || syncing) return;
     syncing = true;
@@ -1265,14 +1949,20 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     syncMessage = 'Синхронизация…';
     _skippedFromServer = 0;
     _notify();
-    final sent = Map<String, Map<String, dynamic>>.from(_dirty);
     try {
+      final caps = await _refreshCapabilities();
+      await _uploadPending(caps);
+      final sent = {
+        for (final entry in _dirty.entries)
+          if (_sendable(entry.value, caps)) entry.key: entry.value,
+      };
       Future<int> run() => _api.synchronize(
         accessToken: _accessToken,
         cursor: _cursor,
         deviceId: _deviceId,
         changes: sent.values.toList(),
         applyPage: _applyPage,
+        ledgerId: activeLedgerId,
       );
       try {
         await run();
@@ -1287,19 +1977,31 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
           _dirty.remove(entry.key);
         }
       }
+      // After the pull: other devices' progress is known, so a rule does
+      // not create what they already created or the user deleted.
+      _generateRecurring(_clock());
       lastSyncAt = DateTime.now();
       await _persist();
+      final waiting = _dirty.values.any((c) => _sendable(c, caps));
       syncMessage =
           sessionPersistenceWarning ??
           (_skippedFromServer > 0
               ? 'Синхронизировано. Пропущено записей с ошибками: $_skippedFromServer — см. Настройки → Данные'
-              : _dirty.isEmpty
+              : !waiting
               ? 'Синхронизировано'
               : 'Есть изменения для следующей синхронизации');
     } catch (e) {
-      error = e is SyncApiException
-          ? e.message
-          : 'Не удалось синхронизировать: $e';
+      if (e is SyncApiException &&
+          activeLedgerId != null &&
+          (e.statusCode == 403 || e.statusCode == 404)) {
+        // Removed from the shared ledger or it was deleted: back to personal.
+        await _switchLedger(null);
+        error = 'Нет доступа к общему пространству. Открыто личное.';
+      } else {
+        error = e is SyncApiException
+            ? e.message
+            : 'Не удалось синхронизировать: $e';
+      }
       syncMessage = 'Изменения сохранены на устройстве';
       rethrow;
     } finally {
@@ -1339,8 +2041,12 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _merge(Map<String, dynamic> change) {
-    final key = _key(change);
     final entity = change['entity'] as String;
+    final codec = entityCodecs[entity];
+    // An entity of a newer contract is skipped silently (§0.1).
+    if (codec == null) return;
+    final target = _collections[entity]!;
+    final key = _key(change);
     final id = change['id'] as String;
     final incoming = DateTime.parse(change['updatedAt'] as String);
     final pending = _dirty[key];
@@ -1368,45 +2074,188 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         !incoming.isAfter(DateTime.parse(tombstone['updatedAt'] as String))) {
       return;
     }
-    DateTime? local;
-    if (entity == 'transaction') local = _transactions[id]?.updatedAt;
-    if (entity == 'category') local = _categories[id]?.updatedAt;
-    if (entity == 'budget') local = _budgets[id]?.updatedAt;
+    final local = target[id]?.updatedAt;
     if (local != null && incoming.isBefore(local)) return;
     if (change['deleted'] == true) {
-      if (entity == 'transaction') _transactions.remove(id);
-      if (entity == 'category') _categories.remove(id);
-      if (entity == 'budget') _budgets.remove(id);
+      target.remove(id);
       _tombstones[key] = Map<String, dynamic>.from(change);
     } else {
-      final payload = Map<String, dynamic>.from(change['payload'] as Map);
-      if (entity == 'transaction') {
-        _transactions[id] = TransactionRecord.fromPayload(
-          id: id,
-          updatedAt: incoming,
-          payload: payload,
-        );
-      }
-      if (entity == 'category') {
-        _categories[id] = CategoryRecord.fromPayload(
-          id: id,
-          updatedAt: incoming,
-          payload: payload,
-        );
-      }
-      if (entity == 'budget') {
-        _budgets[id] = BudgetRecord.fromPayload(
-          id: id,
-          updatedAt: incoming,
-          payload: payload,
-        );
-      }
+      target[id] = codec.fromPayload(
+        id: id,
+        updatedAt: incoming,
+        payload: Map<String, dynamic>.from(change['payload'] as Map),
+      );
       _tombstones.remove(key);
     }
     if (pending != null &&
         incoming.isAfter(DateTime.parse(pending['updatedAt'] as String))) {
       _dirty.remove(key);
     }
+  }
+
+  // Shared ledgers (§7). Each has its own records, cursor and queue on the
+  // device; switching never moves records between ledgers.
+
+  void _requireLedgers() {
+    if (session == null) throw StateError('Войдите в аккаунт');
+    if (!supportsLedgers) {
+      throw StateError('Сервер не поддерживает общие пространства');
+    }
+  }
+
+  Future<void> _saveLedgers(List<Ledger> next) async {
+    ledgers = List.unmodifiable(next);
+    // Names and roles only: member e-mails are not kept on the device.
+    final key = 'ledgers.$serverUrl|${session!.userId}';
+    final raw = jsonEncode([
+      for (final l in next) {'id': l.id, 'name': l.name, 'role': l.role},
+    ]);
+    await _preferences!.setString(key, raw);
+    _ledgersSource = '$key=$raw';
+  }
+
+  /// Lists the shared ledgers; falls back to the personal ledger when the
+  /// active one is no longer listed.
+  Future<List<Ledger>> refreshLedgers() => _exclusive(() async {
+    await _refreshCapabilities();
+    _requireLedgers();
+    final next = await _authorized(_api.ledgers);
+    await _saveLedgers(next);
+    if (activeLedgerId != null && !next.any((l) => l.id == activeLedgerId)) {
+      await _switchLedger(null);
+    }
+    _notify();
+    return ledgers;
+  });
+
+  Future<Ledger> createLedger(String name) => _exclusive(() async {
+    _requireLedgers();
+    _check(name.trim().isNotEmpty, 'Введите название пространства');
+    final ledger = await _authorized(
+      (token) => _api.createLedger(token, name.trim()),
+    );
+    await _saveLedgers([...ledgers, ledger]);
+    _notify();
+    return ledger;
+  });
+
+  Future<void> renameLedger(String id, String name) => _exclusive(() async {
+    _requireLedgers();
+    _check(name.trim().isNotEmpty, 'Введите название пространства');
+    final renamed = await _authorized(
+      (token) => _api.renameLedger(token, id, name.trim()),
+    );
+    await _saveLedgers([
+      for (final l in ledgers)
+        if (l.id != id)
+          l
+        else
+          renamed ??
+              Ledger(
+                id: l.id,
+                name: name.trim(),
+                role: l.role,
+                members: l.members,
+              ),
+    ]);
+    _notify();
+  });
+
+  /// Owner: deletes the ledger on the server with all its records. The copy
+  /// on this device stays but is no longer shown.
+  Future<void> deleteLedger(String id) => _exclusive(() async {
+    _requireLedgers();
+    await _authorized((token) => _api.deleteLedger(token, id));
+    await _forgetLedger(id);
+  });
+
+  /// Owner: a one-time invitation code.
+  Future<LedgerInvite> createLedgerInvite(String id) => _exclusive(() async {
+    _requireLedgers();
+    return _authorized((token) => _api.createInvite(token, id));
+  });
+
+  /// Joins by code and opens the ledger.
+  Future<Ledger> joinLedger(String code) => _exclusive(() async {
+    _requireLedgers();
+    final ledger = await _authorized((token) => _api.joinLedger(token, code));
+    await _saveLedgers([
+      for (final l in ledgers)
+        if (l.id != ledger.id) l,
+      ledger,
+    ]);
+    await _switchLedger(ledger.id);
+    _notify();
+    unawaited(Future(_backgroundSync));
+    return ledger;
+  });
+
+  /// A member leaves; the owner of a ledger with members cannot
+  /// (`owner_cannot_leave`) and deletes it instead.
+  Future<void> leaveLedger(String id) => _exclusive(() async {
+    _requireLedgers();
+    final user = session!.userId;
+    await _authorized((token) => _api.removeLedgerMember(token, id, user));
+    await _forgetLedger(id);
+  });
+
+  /// Owner: removes another member.
+  Future<void> removeLedgerMember(String id, String userId) => _exclusive(
+    () async {
+      _requireLedgers();
+      await _authorized((token) => _api.removeLedgerMember(token, id, userId));
+      await _saveLedgers([
+        for (final l in ledgers)
+          if (l.id != id)
+            l
+          else
+            Ledger(
+              id: l.id,
+              name: l.name,
+              role: l.role,
+              members: [
+                for (final m in l.members)
+                  if (m.userId != userId) m,
+              ],
+            ),
+      ]);
+      _notify();
+    },
+  );
+
+  Future<void> _forgetLedger(String id) async {
+    await _saveLedgers([
+      for (final l in ledgers)
+        if (l.id != id) l,
+    ]);
+    if (activeLedgerId == id) await _switchLedger(null);
+    _notify();
+  }
+
+  /// Opens a shared ledger, or the personal one with null, and syncs it.
+  Future<void> selectLedger(String? id) => _exclusive(() async {
+    if (id != null) {
+      if (session == null) throw StateError('Войдите в аккаунт');
+      if (!ledgers.any((l) => l.id == id)) {
+        throw ArgumentError('Пространство не найдено');
+      }
+    }
+    if (id == activeLedgerId) return;
+    await _switchLedger(id);
+    _notify();
+    unawaited(Future(_backgroundSync));
+  });
+
+  Future<void> _switchLedger(String? id) async {
+    final user = session?.userId;
+    if (user == null) return;
+    if (id == null) {
+      await _preferences!.remove(_ledgerPreference(user));
+    } else {
+      await _preferences!.setString(_ledgerPreference(user), id);
+    }
+    activeLedgerId = id;
+    await _loadScope();
   }
 
   void _backgroundSync() {

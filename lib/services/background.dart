@@ -27,7 +27,7 @@ void balanceBackgroundDispatcher() {
       await notifications.initialize();
       await notifications.ledgerChanged(
         budgets: store.budgets,
-        transactions: store.transactions,
+        transactions: store.baseTransactions.items,
       );
     } catch (_) {
       // WorkManager retries with backoff; details/tokens are never logged.
