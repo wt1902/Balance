@@ -7,6 +7,14 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
+// G_APPLICATION_DEFAULT_FLAGS appeared in GLib 2.74; release builds target
+// Ubuntu 22.04 (GLib 2.72).
+#if GLIB_CHECK_VERSION(2, 74, 0)
+#define BALANCE_APPLICATION_FLAGS G_APPLICATION_DEFAULT_FLAGS
+#else
+#define BALANCE_APPLICATION_FLAGS G_APPLICATION_FLAGS_NONE
+#endif
+
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
@@ -151,5 +159,5 @@ MyApplication* my_application_new() {
 
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_DEFAULT_FLAGS, nullptr));
+                                     BALANCE_APPLICATION_FLAGS, nullptr));
 }
