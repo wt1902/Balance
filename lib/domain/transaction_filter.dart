@@ -1,4 +1,5 @@
 import 'finance.dart';
+import 'records.dart';
 
 enum TransactionSort {
   newest('Сначала новые'),
@@ -46,6 +47,7 @@ class TransactionFilter {
     this.minMinor,
     this.maxMinor,
     this.categories = const {},
+    this.tags = const {},
     this.sort = TransactionSort.newest,
   });
 
@@ -61,6 +63,10 @@ class TransactionFilter {
 
   /// Category names; transactions group by name across the app.
   final Set<String> categories;
+
+  /// Tags (contract v2 §6): an operation matches when it has any of them,
+  /// regardless of case.
+  final Set<String> tags;
   final TransactionSort sort;
 
   bool get hasPeriod => start != null || endExclusive != null;
@@ -68,7 +74,15 @@ class TransactionFilter {
 
   /// Filters set in the filter sheet (search, kind and sort are on screen).
   int get activeCount =>
-      (hasPeriod ? 1 : 0) + (hasAmount ? 1 : 0) + (categories.isEmpty ? 0 : 1);
+      (hasPeriod ? 1 : 0) +
+      (hasAmount ? 1 : 0) +
+      (categories.isEmpty ? 0 : 1) +
+      (tags.isEmpty ? 0 : 1);
+
+  /// Transfers are neither income nor expense: they are listed only while
+  /// the filter does not ask for a kind, a category or a tag.
+  bool get showsTransfers =>
+      kind == 'all' && categories.isEmpty && tags.isEmpty;
 
   TransactionFilter copyWith({
     String? kind,
@@ -78,6 +92,7 @@ class TransactionFilter {
     int? Function()? minMinor,
     int? Function()? maxMinor,
     Set<String>? categories,
+    Set<String>? tags,
     TransactionSort? sort,
   }) => TransactionFilter(
     kind: kind ?? this.kind,
@@ -87,6 +102,7 @@ class TransactionFilter {
     minMinor: minMinor == null ? this.minMinor : minMinor(),
     maxMinor: maxMinor == null ? this.maxMinor : maxMinor(),
     categories: categories ?? this.categories,
+    tags: tags ?? this.tags,
     sort: sort ?? this.sort,
   );
 
@@ -106,8 +122,52 @@ class TransactionFilter {
     if (categories.isNotEmpty && !categories.contains(t.categoryName)) {
       return false;
     }
+    if (tags.isNotEmpty) {
+      final wanted = {for (final tag in tags) tag.toLowerCase()};
+      if (!t.tags.any((tag) => wanted.contains(tag.toLowerCase()))) {
+        return false;
+      }
+    }
     final q = query.trim().toLowerCase();
-    return q.isEmpty || '${t.categoryName} ${t.note}'.toLowerCase().contains(q);
+    return q.isEmpty ||
+        '${t.categoryName} ${t.note} ${t.tags.join(' ')}'
+            .toLowerCase()
+            .contains(q);
+  }
+
+  /// A transfer matches the period, the amount bounds (its source amount)
+  /// and the search in its note or account names.
+  bool matchesTransfer(TransferRecord t, {String accountNames = ''}) {
+    if (!showsTransfers) return false;
+    final from = start, to = endExclusive;
+    if (from != null && t.date.isBefore(from)) return false;
+    if (to != null && !t.date.isBefore(to)) return false;
+    final min = minMinor, max = maxMinor;
+    if (min != null && t.amountMinor < min) return false;
+    if (max != null && t.amountMinor > max) return false;
+    final q = query.trim().toLowerCase();
+    return q.isEmpty ||
+        'перевод ${t.note} $accountNames'.toLowerCase().contains(q);
+  }
+
+  /// Matching transfers in the date order of [sort] (amount sorts list
+  /// transactions only).
+  List<TransferRecord> applyTransfers(
+    Iterable<TransferRecord> items, {
+    String Function(TransferRecord)? accountNames,
+  }) {
+    if (!sort.byDate) return const [];
+    final result = items
+        .where(
+          (t) => matchesTransfer(t, accountNames: accountNames?.call(t) ?? ''),
+        )
+        .toList();
+    result.sort(
+      sort == TransactionSort.oldest
+          ? (a, b) => a.date.compareTo(b.date)
+          : (a, b) => b.date.compareTo(a.date),
+    );
+    return result;
   }
 
   /// Matching transactions in the chosen order; equal amounts newest first.
@@ -134,9 +194,13 @@ class TransactionFilter {
 /// One local calendar day of the list with its totals. Like period analytics,
 /// totals leave balance adjustments out; they still appear in [items].
 class DayGroup {
-  DayGroup(this.day, this.items);
+  DayGroup(this.day, this.items, [List<TransferRecord>? transfers])
+    : transfers = transfers ?? [];
   final DateTime day;
   final List<TransactionRecord> items;
+
+  /// Transfers of the day; they never change the day's totals.
+  final List<TransferRecord> transfers;
 
   late final int incomeMinor = _sum(TransactionKind.income);
   late final int expenseMinor = _sum(TransactionKind.expense);
@@ -146,17 +210,36 @@ class DayGroup {
       .where((t) => !t.isBalanceAdjustment && t.kind == kind)
       .fold(0, (sum, t) => sum + t.amountMinor);
 
-  /// Consecutive transactions of the same local day; [items] must be sorted
-  /// by date (either direction).
-  static List<DayGroup> group(List<TransactionRecord> items) {
+  static DateTime _localDay(DateTime date) {
+    final local = date.toLocal();
+    return DateTime(local.year, local.month, local.day);
+  }
+
+  /// Consecutive operations of the same local day; [items] and [transfers]
+  /// must be sorted by date, newest first unless [oldestFirst].
+  static List<DayGroup> group(
+    List<TransactionRecord> items, {
+    List<TransferRecord> transfers = const [],
+    bool oldestFirst = false,
+  }) {
     final groups = <DayGroup>[];
-    for (final item in items) {
-      final local = item.date.toLocal();
-      final day = DateTime(local.year, local.month, local.day);
+    var i = 0, j = 0;
+    while (i < items.length || j < transfers.length) {
+      final takeItem =
+          j >= transfers.length ||
+          (i < items.length &&
+              (oldestFirst
+                  ? !items[i].date.isAfter(transfers[j].date)
+                  : !items[i].date.isBefore(transfers[j].date)));
+      final date = takeItem ? items[i].date : transfers[j].date;
+      final day = _localDay(date);
       if (groups.isEmpty || groups.last.day != day) {
-        groups.add(DayGroup(day, [item]));
+        groups.add(DayGroup(day, []));
+      }
+      if (takeItem) {
+        groups.last.items.add(items[i++]);
       } else {
-        groups.last.items.add(item);
+        groups.last.transfers.add(transfers[j++]);
       }
     }
     return groups;

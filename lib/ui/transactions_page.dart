@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../domain/finance.dart';
+import '../domain/records.dart';
 import '../domain/transaction_filter.dart';
 import 'design.dart';
 
@@ -40,10 +41,14 @@ class TransactionFilterSheet extends StatefulWidget {
     required this.filter,
     required this.categories,
     required this.currency,
+    this.tags = const [],
   });
   final TransactionFilter filter;
   final List<CategoryRecord> categories;
   final String currency;
+
+  /// Tags known from operations (contract v2 §6).
+  final List<String> tags;
   @override
   State<TransactionFilterSheet> createState() => _TransactionFilterSheetState();
 }
@@ -233,6 +238,29 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                     ),
                 ],
               ),
+              if (widget.tags.isNotEmpty || draft.tags.isNotEmpty) ...[
+                const SizedBox(height: 20),
+                Text('Теги', style: theme.textTheme.titleSmall),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final tag in {...widget.tags, ...draft.tags})
+                      FilterChip(
+                        label: Text('#$tag'),
+                        selected: draft.tags.contains(tag),
+                        onSelected: (on) => setState(
+                          () => draft = draft.copyWith(
+                            tags: on
+                                ? {...draft.tags, tag}
+                                : ({...draft.tags}..remove(tag)),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
               const SizedBox(height: 24),
               Wrap(
                 alignment: WrapAlignment.end,
@@ -271,13 +299,34 @@ class DayPanel extends StatelessWidget {
     required this.group,
     required this.tile,
     required this.currency,
+    this.transferTile,
+    this.totals,
+    this.oldestFirst = false,
   });
   final DayGroup group;
   final Widget Function(TransactionRecord) tile;
+  final Widget Function(TransferRecord)? transferTile;
+
+  /// Day totals in [currency]; the group's own sums by default.
+  final FinanceSummary? totals;
   final String currency;
+  final bool oldestFirst;
   @override
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.labelLarge;
+    final income = totals?.incomeMinor ?? group.incomeMinor;
+    final expenses = totals?.expensesMinor ?? group.expenseMinor;
+    // Transactions and transfers of the day in one date order.
+    final entries = <(DateTime, Widget Function())>[
+      for (final item in group.items) (item.date, () => tile(item)),
+      if (transferTile case final transfer?)
+        for (final item in group.transfers) (item.date, () => transfer(item)),
+    ];
+    if (group.transfers.isNotEmpty) {
+      entries.sort(
+        (a, b) => oldestFirst ? a.$1.compareTo(b.$1) : b.$1.compareTo(a.$1),
+      );
+    }
     return Panel(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
@@ -299,14 +348,14 @@ class DayPanel extends StatelessWidget {
                       alignment: WrapAlignment.end,
                       spacing: 10,
                       children: [
-                        if (group.incomeMinor > 0)
+                        if (income > 0)
                           Text(
-                            '+${money(group.incomeMinor, currency)}',
+                            '+${money(income, currency)}',
                             style: style?.copyWith(color: Colors.teal),
                           ),
-                        if (group.expenseMinor > 0)
+                        if (expenses > 0)
                           Text(
-                            '−${money(group.expenseMinor, currency)}',
+                            '−${money(expenses, currency)}',
                             style: style?.copyWith(color: Colors.deepOrange),
                           ),
                       ],
@@ -316,7 +365,7 @@ class DayPanel extends StatelessWidget {
               ],
             ),
           ),
-          for (final item in group.items) tile(item),
+          for (final entry in entries) entry.$2(),
         ],
       ),
     );

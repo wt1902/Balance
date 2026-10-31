@@ -14,6 +14,7 @@ import '../domain/finance.dart';
 import '../domain/records.dart';
 import '../domain/recurring.dart';
 import '../domain/templates.dart';
+import '../domain/transaction_filter.dart';
 import '../domain/appearance.dart';
 import 'attachment_cache.dart';
 import 'launch_actions.dart';
@@ -256,6 +257,68 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       LedgerMath.unassignedBalances(_transactions.values, baseCurrency);
   int goalProgress(GoalRecord goal) =>
       LedgerMath.goalProgress(goal, accountBalances);
+  int goalRemaining(GoalRecord goal) =>
+      LedgerMath.goalRemaining(goal, accountBalances);
+
+  /// The currency of a goal: its own, else its account's, else the base.
+  String goalCurrency(GoalRecord goal) =>
+      goal.currency ??
+      LedgerMath.accountCurrency(goal.accountId, _accounts, baseCurrency);
+
+  /// The currency an amount of [item] is in (§2).
+  String transactionCurrency(TransactionRecord item) =>
+      LedgerMath.transactionCurrency(item, _accounts, baseCurrency);
+
+  /// An account's currency; a deleted or unknown account counts as base.
+  String accountCurrency(String? accountId) =>
+      LedgerMath.accountCurrency(accountId, _accounts, baseCurrency);
+
+  /// Tags used in operations, most used first, then alphabetically; one
+  /// spelling per tag regardless of case.
+  List<String> get knownTags => _knownTags ??= () {
+    final counts = <String, int>{};
+    final spelling = <String, String>{};
+    for (final item in _transactions.values) {
+      for (final tag in item.tags) {
+        final key = tag.toLowerCase();
+        spelling.putIfAbsent(key, () => tag);
+        counts[key] = (counts[key] ?? 0) + 1;
+      }
+    }
+    final keys = counts.keys.toList()
+      ..sort((a, b) {
+        final byCount = counts[b]!.compareTo(counts[a]!);
+        return byCount != 0 ? byCount : a.compareTo(b);
+      });
+    return List<String>.unmodifiable([for (final key in keys) spelling[key]!]);
+  }();
+  List<String>? _knownTags;
+
+  /// Currency codes known from the base, accounts, rates and operations.
+  Set<String> get knownCurrencies => {
+    baseCurrency,
+    currency,
+    for (final a in _accounts.values) ?a.currency,
+    for (final r in _rates.values) ...[r.from, r.to],
+    for (final t in _transactions.values) ?t.currency,
+  };
+
+  /// Income and expenses of [items] in the base currency, adjustments and
+  /// amounts without a rate left out (operations list totals).
+  FinanceSummary baseTotals(Iterable<TransactionRecord> items) {
+    final byId = _baseById ??= {
+      for (final item in baseTransactions.items) item.id: item,
+    };
+    return DayGroup.totals([for (final item in items) ?byId[item.id]]);
+  }
+
+  Map<String, TransactionRecord>? _baseById;
+
+  /// Occurrences of `remind` rules waiting for a decision, computed once
+  /// per change.
+  List<RecurringOccurrence> get pendingReminders =>
+      _pendingReminders ??= List.unmodifiable(pendingRecurring());
+  List<RecurringOccurrence>? _pendingReminders;
 
   bool get supportsAttachments => capabilities?.attachments ?? false;
   bool get supportsLedgers => capabilities?.ledgers ?? false;
@@ -298,6 +361,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _sortedTransactions = null;
     _baseTransactions = null;
     _totalBalance = null;
+    _baseById = null;
+    _knownTags = null;
+    _pendingReminders = null;
     if (!_disposed) notifyListeners();
   }
 
@@ -521,6 +587,9 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     _sortedTransactions = null;
     _baseTransactions = null;
     _totalBalance = null;
+    _baseById = null;
+    _knownTags = null;
+    _pendingReminders = null;
     _persisted.clear();
     _persistFull = true;
     final raw = await _storage!.read(_scope);

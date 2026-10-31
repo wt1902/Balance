@@ -225,4 +225,10 @@ class LedgerMath {
       goal.accountId == null
       ? goal.savedMinor
       : accountBalances[goal.accountId] ?? 0;
+
+  /// What is left to save for [goal], never below zero.
+  static int goalRemaining(GoalRecord goal, Map<String, int> accountBalances) {
+    final left = goal.targetMinor - goalProgress(goal, accountBalances);
+    return left > 0 ? left : 0;
+  }
 }

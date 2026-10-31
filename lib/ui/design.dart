@@ -103,6 +103,7 @@ const categoryIcons = <String, IconData>{
   'plus.circle.fill': Icons.add_circle_outline,
   'slider.horizontal.3': Icons.tune,
   'tune': Icons.tune,
+  'swap': Icons.swap_horiz,
 };
 
 class CategoryAvatar extends StatelessWidget {

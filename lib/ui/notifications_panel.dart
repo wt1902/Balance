@@ -40,7 +40,7 @@ class NotificationsPanel extends StatelessWidget {
                 () => n.setBudgetAlerts(
                   on,
                   budgets: store.budgets,
-                  transactions: store.transactions,
+                  transactions: store.baseTransactions.items,
                 ),
               ),
             ),
@@ -58,7 +58,10 @@ class NotificationsPanel extends StatelessWidget {
             onChanged: Notifications.canSchedule
                 ? (on) => run(
                     () => AppLock.whileExternal(
-                      () => n.setReminder(on, transactions: store.transactions),
+                      () => n.setReminder(
+                        on,
+                        transactions: store.baseTransactions.items,
+                      ),
                     ),
                   )
                 : null,
@@ -80,7 +83,7 @@ class NotificationsPanel extends StatelessWidget {
                       () => n.setReminderTime(
                         picked.hour,
                         picked.minute,
-                        transactions: store.transactions,
+                        transactions: store.baseTransactions.items,
                       ),
                     );
                   }

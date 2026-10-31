@@ -8,7 +8,7 @@ Source audit of the Swift iOS/macOS/watchOS and Kotlin Android applications. Sta
 
 | Native feature | Source | Required behavior / native differences | Flutter status |
 | --- | --- | --- | --- |
-| Navigation | `Balance/Balance/App/ContentView.swift`; `Balance/BalanceMac/MacContentView.swift`; `BalanceAndroid/app/src/main/java/com/example/balanceandroid/ui/BalanceRoot.kt` | Overview, analytics, transactions, budgets, settings; categories and server settings; Mac sidebar, phone bottom tabs | Implemented in `lib/ui/app.dart`; responsive rail/bottom tabs; widget verification in progress |
+| Navigation | `Balance/Balance/App/ContentView.swift`; `Balance/BalanceMac/MacContentView.swift`; `BalanceAndroid/app/src/main/java/com/example/balanceandroid/ui/BalanceRoot.kt` | Overview, analytics, transactions, budgets, settings; categories and server settings; Mac sidebar, phone bottom tabs | Implemented in `lib/ui/app.dart`; responsive rail/bottom tabs. Since 4.3 the phone's fifth tab is «Ещё» (accounts, recurring, goals, debts, settings); the rail lists all nine sections |
 | Transaction model | `Balance/Balance/Models/FinanceTransaction.swift`; Android `data/Entities.kt` | UUID, positive Double amount, date, note, category name/icon/emoji/color snapshot, kind, adjustment flag, updatedAt | Implemented in `lib/domain/finance.dart`; serialization tests pass; uses integer hundredths (see deviations) |
 | Total balance | `Balance/Balance/Utilities/FinanceCalculations.swift`; Android `data/FinanceMath.kt` | All income minus all expenses, including adjustments and future dates; no calculation rounding | Implemented; finance tests pass |
 | Period summary | Same | Income, expenses, result; exclude adjustments | Implemented with half-open periods; finance tests pass |
@@ -28,7 +28,7 @@ Source audit of the Swift iOS/macOS/watchOS and Kotlin Android applications. Sta
 | Category design | `Balance/Balance/Shared/CategoryDesignOptions.swift`; Android editors/components | 50 icon names, 30 suggested emojis, 24 named colors; custom emoji input; unknown color→indigo; Apple `auto` resolves built-in color by name | Implemented; 50/30/24 catalog tests pass; auto-color fallback differs |
 | Monthly budgets | `Balance/Balance/Views/Budgets/*.swift`; Mac/Watch features; Android root/editors/view model | Current month only; expense built-ins + custom categories; >0 create/update, empty/invalid/≤0 delete; expense totals exclude adjustments | Implemented; explicit delete and month navigation added; UTC-to-local month regression passes under Europe/Moscow |
 | Budget feedback | iOS budgets | Progress capped at 1; ≥1 red, ≥.8 orange, otherwise indigo; spent/limit, remaining, overage. Android/Mac/Watch show simpler progress + limit | Implemented in source; 80/100% colors, remaining/overage; visual checks pending |
-| Currency | `Balance/Balance/Utilities/CurrencyFormatting.swift`; Android settings/components | RUB default; EUR/USD/SEK; display-only setting, no conversion or per-record currency; locale-aware formatting | Implemented; fixed ru_RU locale and two decimals differ from native device-locale 0–2 digits |
+| Currency | `Balance/Balance/Utilities/CurrencyFormatting.swift`; Android settings/components | RUB default; EUR/USD/SEK; display-only setting, no conversion or per-record currency; locale-aware formatting | Fixed ru_RU locale and two decimals differ from native device-locale 0–2 digits. Flutter 4.3 goes beyond v1 natives: per-record currency, rates and a synced base currency (contract v2, see below) |
 | Theme | `Balance/Balance/Shared/AppTheme.swift`; Android `ui/theme/Theme.kt` | system default, light, dark; persisted locally | Implemented in source; secure device settings round-trip not tested |
 | Settings details | iOS settings; Mac/Watch features; Android root | Category/server links, operation count, storage/privacy description, version; local preferences excluded from finance sync | Implemented links/categories/about/storage messaging; saved-operation count absent at review |
 | CSV export | `Balance/Balance/Views/Settings/CSVDocument.swift` | Apple iOS/Mac only; all transactions descending; `balance-transactions.csv`, UTF-8, LF, ISO8601 UTC; raw positive amount; header `Дата,Тип,Категория,Сумма,Заметка`; every value quoted and embedded quotes doubled; adjustment type `Корректировка`; disabled for empty data | Flutter 4.2 keeps the five native columns first and appends `ID,Вид,Иконка,Эмодзи,Цвет,Изменено`, writes a UTF-8 BOM and disarms formula-like cells reversibly; the file round-trips through statement import. Share/save dialogs checked on Linux and Android 15 |
@@ -181,8 +181,8 @@ Keyboard shortcuts (Ctrl on Linux/Windows/Web, ⌘ on macOS): N new transaction,
 
 ## Contract v2 (data layer)
 
-Implements `docs/ecosystem/CONTRACT_V2.md` below the UI; the screens come in a
-separate change. Native iOS/macOS/Android clients stay on v1 (§9) and have
+Implements `docs/ecosystem/CONTRACT_V2.md` below the UI; the screens are
+described in «Contract v2 (UI)» below. Native iOS/macOS/Android clients stay on v1 (§9) and have
 none of this; BalanceWatch and BalanceServer follow the same contract.
 
 - **Models** (`lib/domain/records.dart`, `finance.dart`): accounts, transfers,
@@ -222,3 +222,57 @@ day (an occurrence on the end day is created); «Пропустить» moves
 too, and recording an occurrence advances `generatedThrough` only over a fully
 handled prefix; an account or transaction without `currency` follows the
 current base currency, so changing the base currency re-labels them.
+
+## Contract v2 (UI)
+
+Screens on top of the data layer, Material 3, Russian strings. The UI does no
+money math: every sum comes from `AppStore` (`baseTransactions`,
+`totalBalance`, `accountBalances`, `goalProgress`/`goalRemaining`,
+`baseTotals`) or `FinanceMath`/`LedgerMath`.
+
+- **Navigation**: phones keep five tabs — Обзор, Операции, Аналитика,
+  Бюджеты, «Ещё»; «Ещё» opens Счета, Регулярные платежи, Цели, Долги and
+  Настройки (with a back button). Wide screens show all nine sections in the
+  rail (it scrolls in a window shorter than ~780 px). Ctrl/⌘+1…5 still open
+  the first four tabs and Настройки.
+- **Base currency**: overview, analytics, budgets, forecasts, the home widget
+  and budget notifications use base-currency amounts; a «Нет курса USD/RUB»
+  notice with an «add rate» button appears on the overview, analytics,
+  budgets, accounts and settings. Pairs are written `USD/RUB` because the
+  bundled Roboto has no arrow glyph and Web loads no fallback fonts.
+- **Accounts** (`AccountsSection`, `AccountEditor`): balances in each
+  account's currency, «Без счёта» by currency, «Удалённый счёт» for balances
+  of deleted accounts, archive (hidden from pickers, still in the total),
+  per-account balance adjustment, delete with a warning. New accounts store
+  their currency explicitly.
+- **Transfers** (`TransferEditor`): from/to among active accounts, received
+  amount only when currencies differ; shown in the operations list by day
+  (date sorts only, hidden when a kind, category or tag filter is set), never
+  in day totals, analytics or budgets.
+- **Transaction editor**: account, currency («Базовая»/«Как у счёта» or an
+  explicit code), tags (chips, comma or Enter, suggestions from used tags,
+  §6 validation). Editing now starts from the stored record, so recurring
+  links and unknown payload fields survive (§0.2). Operations show their own
+  currency, account and tags; list totals are in the base currency.
+- **Tags**: search matches tags; the filter sheet has a tag section and the
+  list shows a removable tag chip.
+- **Recurring** (`RecurringSection`, `RecurringEditor`,
+  `PendingRecurringPanel`): frequency, interval, start/end (stored at UTC noon
+  of the picked day so the UTC occurrence day is the picked day), auto/remind,
+  pause; next date per rule. «Ожидают» on the overview (first three) and on
+  the recurring page with «Записать»/«Пропустить»; the «Ещё» tab shows a
+  badge with the count. Editing a rule keeps `generatedThrough`.
+- **Goals and debts**: progress bars, «Осталось», «Цель достигнута»,
+  deadline/due date (overdue highlighted), archive / closed sections. A goal
+  linked to an account takes that account's currency.
+- **Rates and base currency** (`CurrencySettingsPanel`, `RateEditor`): a rate
+  for today is dated now (so it applies at once), another day at local
+  midnight; up to 6 decimals, comma accepted.
+- **Attachments** (`AttachmentsSection`): in the editor of a saved operation,
+  only when the server reports attachment support; add via `file_selector`
+  (JPEG, PNG, HEIC, PDF), JPEG/PNG preview, other types open through the
+  share/save flow, delete, «ждёт загрузки» until uploaded.
+- **Shared ledgers** (`LedgersPanel`): only signed in and when the server
+  reports `ledgers`; personal + shared list with switch, create, rename,
+  invite code (copy, expiry), join, members (owner removes), leave, delete.
+

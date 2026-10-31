@@ -5,6 +5,7 @@ import 'package:balance_flutter/ui/editors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'contract_v2_ui_test.dart' as v2;
 import 'widget_test.dart' as fixtures;
 
 Future<void> capture(
@@ -80,5 +81,47 @@ void main() {
         }
       },
     );
+  }
+  for (final size in fixtures.screenSizes) {
+    for (final oled in [false, true]) {
+      testWidgets(
+        'capture v2 sections ${size.width.toInt()}x${size.height.toInt()}'
+        '${oled ? ' OLED' : ''}',
+        (tester) async {
+          final store = (await tester.runAsync(v2.createV2Store))!;
+          if (oled) {
+            await tester.runAsync(() async {
+              await store.setThemePreset('oled');
+              await store.setTheme('dark');
+            });
+          }
+          final key = GlobalKey();
+          await fixtures.boot(tester, store, size, boundaryKey: key);
+          final suffix = oled ? '-oled' : '';
+          for (final (page, name) in [
+            (0, 'v2-overview'),
+            (1, 'v2-transactions'),
+            (5, 'accounts'),
+            (6, 'recurring'),
+            (7, 'goals'),
+            (8, 'debts'),
+            (4, 'v2-settings'),
+          ]) {
+            await fixtures.navigate(tester, page);
+            expect(tester.takeException(), isNull);
+            await capture(tester, key, size, '$name$suffix');
+          }
+          editDialog<void>(
+            tester.element(find.byType(BalanceShell)),
+            TransactionEditor(categories: store.categories, store: store),
+          );
+          await tester.pumpAndSettle();
+          await fixtures.reveal(tester, find.text('Теги'));
+          await capture(tester, key, size, 'v2-transaction-form$suffix');
+          await tester.tap(find.text('Отмена'));
+          await tester.pumpAndSettle();
+        },
+      );
+    }
   }
 }

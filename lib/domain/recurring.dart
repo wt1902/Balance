@@ -141,4 +141,26 @@ class RecurringEngine {
     }
     return result;
   }
+
+  /// The first occurrence on a UTC day after both [now]'s day and
+  /// `generatedThrough`, for «Следующая …»; null when the rule is paused,
+  /// invalid or ended.
+  static DateTime? nextOccurrence(RecurringRecord rule, DateTime now) {
+    if (rule.isPaused || rule.frequency == null || rule.interval < 1) {
+      return null;
+    }
+    var after = _day(now);
+    final through = rule.generatedThrough;
+    if (through != null) {
+      final day = parseIsoDay(through);
+      if (day.isAfter(after)) after = day;
+    }
+    final end = rule.endDate == null ? null : _day(rule.endDate!);
+    for (var index = _firstIndex(rule, after); ; index++) {
+      final date = occurrenceAt(rule, index)!;
+      final day = _day(date);
+      if (end != null && day.isAfter(end)) return null;
+      if (day.isAfter(after)) return date;
+    }
+  }
 }

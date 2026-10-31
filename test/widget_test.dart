@@ -104,15 +104,44 @@ Future<void> boot(
   await tester.pumpAndSettle();
 }
 
+/// Icons of the contract v2 sections: 5 «Счета», 6 «Регулярные платежи»,
+/// 7 «Цели», 8 «Долги» (after the five [pageIcons]).
+const sectionIcons = [
+  ...pageIcons,
+  Icons.account_balance_wallet_outlined,
+  Icons.event_repeat,
+  Icons.flag_outlined,
+  Icons.handshake_outlined,
+];
+
+/// Opens page [page] (see [sectionIcons]); on phones «Настройки» and the v2
+/// sections are reached through «Ещё».
 Future<void> navigate(WidgetTester tester, int page) async {
-  final navigation = find.byType(NavigationBar).evaluate().isNotEmpty
+  final phone = find.byType(NavigationBar).evaluate().isNotEmpty;
+  final navigation = phone
       ? find.byType(NavigationBar)
       : find.byType(NavigationRail);
-  await tester.tap(
-    find
-        .descendant(of: navigation, matching: find.byIcon(pageIcons[page]))
-        .first,
-  );
+  if (phone && page >= 4) {
+    await tester.tap(
+      find
+          .descendant(of: navigation, matching: find.byIcon(Icons.more_horiz))
+          .first,
+    );
+    await tester.pumpAndSettle();
+    final entry = find.descendant(
+      of: find.byType(ListTile),
+      matching: find.byIcon(sectionIcons[page]),
+    );
+    await Scrollable.ensureVisible(tester.element(entry.first));
+    await tester.pumpAndSettle();
+    await tester.tap(entry.first);
+  } else {
+    await tester.tap(
+      find
+          .descendant(of: navigation, matching: find.byIcon(sectionIcons[page]))
+          .first,
+    );
+  }
   await tester.pumpAndSettle();
 }
 
