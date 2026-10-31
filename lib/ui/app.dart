@@ -2377,7 +2377,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 onPressed: () => showAboutDialog(
                   context: context,
                   applicationName: 'Баланс',
-                  applicationVersion: '4.2.0',
+                  applicationVersion: '4.3.0',
                   applicationIcon: const Icon(
                     Icons.account_balance_wallet_outlined,
                     size: 40,
