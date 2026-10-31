@@ -178,3 +178,47 @@ Flutter-only, computed in `lib/domain/analytics.dart` with the shared rules (adj
 ## Desktop 4.2
 
 Keyboard shortcuts (Ctrl on Linux/Windows/Web, ⌘ on macOS): N new transaction, F search, 1–5 pages, L lock now; listed in Settings on desktop and Web. They are bound on the shell, so they do not fire over an open dialog or under the app lock. The window title is «Баланс».
+
+## Contract v2 (data layer)
+
+Implements `docs/ecosystem/CONTRACT_V2.md` below the UI; the screens come in a
+separate change. Native iOS/macOS/Android clients stay on v1 (§9) and have
+none of this; BalanceWatch and BalanceServer follow the same contract.
+
+- **Models** (`lib/domain/records.dart`, `finance.dart`): accounts, transfers,
+  recurring rules, goals, debts, exchange rates, synchronized settings and
+  attachment metadata; transactions gain `accountId`, `currency`, `tags`,
+  `recurringId`, `occurrence`. All records keep unknown payload fields and
+  send them back (a v1 client loses them).
+- **Currencies and balances** (`lib/domain/currency.dart`): `CurrencyConverter`
+  applies the latest rate on the calculation date (by date, direct pair before
+  reverse on the same date, then `updatedAt`) with BigInt arithmetic on
+  integer hundredths and the exact decimal rate, rounding half up away from
+  zero. `LedgerMath` gives account balances (own currency, transfers
+  included), «Без счёта» by currency, the total balance in the base currency
+  and base-currency transactions for analytics and budgets; amounts without a
+  rate are left out and reported as `C→B` pairs. With one currency and no
+  transfers every v1 result is unchanged (the same transaction objects pass
+  through). The base currency is the synced `baseCurrency` setting, else the
+  device currency. Goal progress is the linked account's balance, else
+  `saved`; debts never touch balances.
+- **Recurring** (`lib/domain/recurring.dart`): UTC calendar, month-end and
+  29 February clamping, deterministic UUID v5 ids, at most 366 per run;
+  `auto` creates, `remind` lists pending occurrences with confirm/skip.
+- **AppStore**: CRUD with tombstones and validation for every entity
+  (tags per §6), capabilities check, ledger-scoped data and sync, ledger
+  management, attachment upload/download with a local cache; deleting a
+  transaction deletes its attachments, a category rename also renames recurring
+  rules. The home-screen widget and budget notifications use base-currency
+  amounts.
+- **Backup / CSV**: backup format version 2 contains every entity (version 1
+  files still restore); the transaction CSV appends `Счёт, Валюта, Теги,
+  Регулярная, Повторение` (tags as a JSON array) and still imports files
+  without these columns.
+
+Interpretations where the contract is silent: `endDate` is compared by UTC
+day (an occurrence on the end day is created); «Пропустить» moves
+`generatedThrough` to that occurrence, so earlier waiting ones are skipped
+too, and recording an occurrence advances `generatedThrough` only over a fully
+handled prefix; an account or transaction without `currency` follows the
+current base currency, so changing the base currency re-labels them.

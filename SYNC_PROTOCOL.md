@@ -92,3 +92,82 @@ should use their OS secure storage. Cursors above 2^53−1 are rejected to avoid
 silent precision loss in Flutter Web. The transport disables redirect following
 where supported; browsers may manage redirects themselves, so configure the
 final HTTPS API URL directly.
+
+## Contract v2
+
+`docs/ecosystem/CONTRACT_V2.md` is the shared contract; this section is how
+the Flutter client implements it. Everything is additive: `/v1/sync`, cursor,
+`sequence`, `updatedAt`, tombstones and last-write-wins are unchanged.
+
+### Entities and payloads
+
+`syncEntities` in `sync_api.dart` lists the eleven entities. Models live in
+`lib/domain/finance.dart` (transaction, category, budget) and
+`lib/domain/records.dart` (account, transfer, recurring, goal, debt, rate,
+setting, attachment); `entityCodecs` maps each entity to its local snapshot
+section and storage key prefix.
+
+| Entity | Payload fields (v2) |
+| --- | --- |
+| `transaction` | v1 fields plus optional `accountId`, `currency`, `tags`, `recurringId`, `occurrence`; written only when set, so a v1 record keeps its exact v1 payload |
+| `account` | `name`, `kindRawValue` (`cash`/`card`/`deposit`/`other`, unknown read as `other` but kept), `icon`, `colorName`, `currency` (null = base), `createdAt`, `isArchived`, `sortOrder` |
+| `transfer` | `fromAccountId`, `toAccountId`, `amount` (source currency), `toAmount` (default `amount`), `date`, `note` |
+| `recurring` | `kindRawValue`, `amount`, `currency`, `accountId`, category snapshot, `note`, `tags`, `frequency`, `interval`, `startDate`, `endDate`, `mode`, `isPaused`, `generatedThrough` (`YYYY-MM-DD`) |
+| `goal` | `name`, `target`, `currency`, `deadline`, `accountId`, `saved`, `icon`, `colorName`, `createdAt`, `isArchived` |
+| `debt` | `person`, `direction` (`iOwe`/`owedToMe`), `amount`, `currency`, `date`, `dueDate`, `note`, `repaid`, `isClosed` |
+| `rate` | `from`, `to`, `rate` (decimal **string**, ≤ 6 fractional digits, > 0), `date` |
+| `setting` | id is the key; `{"value": …}`; known key `baseCurrency` |
+| `attachment` | `transactionId`, `sha256` (64 lower-case hex), `contentType`, `size`, `name`, `createdAt` |
+
+Money is integer hundredths inside the client and a number on the wire, as in
+v1. Every record keeps payload fields it does not know in `extra` and sends
+them back unchanged on the next save (§0.2); local-only snapshot keys (`id`,
+`updatedAt`, `amountMinor`, `limitMinor`) never enter a payload. A pulled
+change of an unknown entity is skipped by `SyncApi.sync` after its `sequence`
+was validated, so the cursor still advances (§0.1). An unreadable record of a
+known entity is quarantined as in v1.
+
+### Capabilities
+
+`SyncApi.capabilities()` reads `GET /v1/capabilities` without authorization;
+404 yields `ServerCapabilities.v1`. AppStore checks at most every 10 minutes
+before a sync (and after sign-in), caches the answer per server in
+preferences, and keeps the last answer (v1 if none) when the check fails.
+Only changes whose entity the server lists are pushed; the rest stay in the
+queue until a later check reports them, so nothing is lost on a v1 server.
+Attachments and ledgers require `attachments`/`ledgers` in the answer.
+
+### Ledgers
+
+The data scope is `server|user` for the personal ledger (the v1 key, so
+existing data stays put) and `server|user|ledger:<id>` for a shared one; each
+has its own records, queue, tombstones, quarantine and cursor. The chosen
+ledger is a per-server, per-user preference (`activeLedger.…`); sign-in starts
+in the personal ledger, where guest records are imported. `/v1/sync` and
+`/v1/attachments/*` carry `X-Balance-Ledger: <id>` for a shared ledger only.
+`SyncApi` implements every `/v1/ledgers` route; AppStore keeps the list
+(id, name and role only; member e-mails are not stored) and returns to the
+personal ledger when the active one is deleted, left, or answers 403/404.
+
+### Attachments
+
+`addAttachment` hashes the bytes (SHA-256), checks type and size against the
+capabilities (contract defaults until known), writes them to the
+content-addressed `AttachmentCache` (files under the app support directory on
+native platforms, a separate IndexedDB database on Web) and queues the record
+plus an `uploads` entry in the ledger snapshot. A sync PUTs pending files
+first and pushes an attachment record only after its file was uploaded. Bytes
+are downloaded lazily (`attachmentBytes`), verified against the hash and
+cached. Local copies are not deleted with a record: another ledger may share
+the file.
+
+### Recurring operations
+
+`RecurringEngine` (`lib/domain/recurring.dart`) computes occurrences in the
+UTC calendar; transaction ids are UUID v5 (namespace
+`6f1c3f5e-8a8d-4c3a-9d2b-4b1f0e7a2c11`, name
+`recurring:<recurringId>:<occurrence>` in lower case). `auto` rules run when
+saved, at startup without an account, and after every successful pull, never
+before it, so progress (`generatedThrough`) and deletions from other devices
+are known first; an id already present or tombstoned is never recreated.
+Created records are pushed on the next sync.

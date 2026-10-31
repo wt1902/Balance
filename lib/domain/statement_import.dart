@@ -19,6 +19,11 @@ class StatementRow {
     this.id,
     this.category,
     this.isBalanceAdjustment = false,
+    this.accountId,
+    this.currency,
+    this.tags = const [],
+    this.recurringId,
+    this.occurrence,
   });
 
   final DateTime date;
@@ -36,6 +41,10 @@ class StatementRow {
   final String? id;
   final CategoryRecord? category;
   final bool isBalanceAdjustment;
+
+  /// Contract v2 fields of Balance's own export (optional columns).
+  final String? accountId, currency, recurringId, occurrence;
+  final List<String> tags;
 }
 
 class StatementParseResult {
@@ -227,8 +236,14 @@ class StatementImport {
     for (var i = 1; i < table.length; i++) {
       final row = table[i];
       String cell(String name) {
-        final index = columns[name]!;
+        final index = columns[name];
+        if (index == null) return '';
         return index < row.length ? FinanceMath.csvValue(row[index]) : '';
+      }
+
+      String? optional(String name) {
+        final value = cell(name).trim();
+        return value.isEmpty ? null : value;
       }
 
       try {
@@ -252,6 +267,19 @@ class StatementImport {
         if (category.name.isEmpty) {
           throw const FormatException('Нет категории');
         }
+        final currency = optional('Валюта')?.toUpperCase();
+        if (currency != null && !isCurrencyCode(currency)) {
+          throw const FormatException('Неверный код валюты');
+        }
+        final rawTags = optional('Теги');
+        final List<String> tags;
+        try {
+          tags = rawTags == null
+              ? const []
+              : TagRules.normalize(jsonDecode(rawTags) as List);
+        } catch (_) {
+          throw const FormatException('Неверный список тегов');
+        }
         rows.add(
           StatementRow(
             date: date,
@@ -262,6 +290,11 @@ class StatementImport {
             id: id,
             category: category,
             isBalanceAdjustment: cell('Тип').trim() == 'Корректировка',
+            accountId: optional('Счёт'),
+            currency: currency,
+            tags: tags,
+            recurringId: optional('Регулярная'),
+            occurrence: optional('Повторение'),
           ),
         );
       } on FormatException catch (e) {
@@ -691,6 +724,11 @@ class StatementImport {
     note: row.description,
     isBalanceAdjustment: row.isBalanceAdjustment,
     kindRawValue: row.kind.name,
+    accountId: row.accountId,
+    currency: row.currency,
+    tags: row.tags,
+    recurringId: row.recurringId,
+    occurrence: row.occurrence,
     updatedAt: DateTime.now().toUtc(),
   );
 }

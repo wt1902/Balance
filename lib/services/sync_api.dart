@@ -1,7 +1,141 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
+
+/// Entities of contract v2 (`docs/ecosystem/CONTRACT_V2.md` §1).
+const syncEntities = {
+  'transaction',
+  'category',
+  'budget',
+  'account',
+  'transfer',
+  'recurring',
+  'goal',
+  'debt',
+  'rate',
+  'setting',
+  'attachment',
+};
+
+/// Header that selects a shared ledger on `/v1/sync` and `/v1/attachments`.
+const ledgerHeader = 'X-Balance-Ledger';
+
+/// `GET /v1/capabilities`. A v1 server has none (404): [v1] then applies,
+/// and a client sends only transactions, categories and budgets.
+class ServerCapabilities {
+  const ServerCapabilities({
+    required this.contract,
+    required this.entities,
+    this.attachmentMaxBytes = 0,
+    this.attachmentTypes = const {},
+    this.ledgers = false,
+  });
+
+  static const v1 = ServerCapabilities(
+    contract: 1,
+    entities: {'transaction', 'category', 'budget'},
+  );
+
+  final int contract;
+  final Set<String> entities;
+  final int attachmentMaxBytes;
+  final Set<String> attachmentTypes;
+  final bool ledgers;
+
+  bool get attachments =>
+      entities.contains('attachment') && attachmentMaxBytes > 0;
+
+  factory ServerCapabilities.fromJson(WireMap json) {
+    final contract = json['contract'];
+    final entities = json['entities'];
+    if (contract is! int || entities is! List) {
+      throw const FormatException('Invalid capabilities');
+    }
+    final attachments = json['attachments'];
+    final files = attachments is Map ? attachments : const {};
+    return ServerCapabilities(
+      contract: contract,
+      entities: {...entities.whereType<String>()},
+      attachmentMaxBytes: (files['maxBytes'] as num?)?.toInt() ?? 0,
+      attachmentTypes: {
+        ...(files['types'] as List? ?? const []).whereType<String>(),
+      },
+      ledgers: json['ledgers'] == true,
+    );
+  }
+
+  WireMap toJson() => {
+    'contract': contract,
+    'entities': entities.toList(),
+    'attachments': {
+      'maxBytes': attachmentMaxBytes,
+      'types': attachmentTypes.toList(),
+    },
+    'ledgers': ledgers,
+  };
+}
+
+class LedgerMember {
+  const LedgerMember({
+    required this.userId,
+    required this.email,
+    required this.role,
+  });
+  final String userId, email, role;
+  factory LedgerMember.fromJson(WireMap json) => LedgerMember(
+    userId: SyncApi._string(json, 'userId'),
+    email: json['email'] as String? ?? '',
+    role: json['role'] as String? ?? 'member',
+  );
+  WireMap toJson() => {'userId': userId, 'email': email, 'role': role};
+}
+
+/// A shared ledger (contract v2 §7). The personal ledger is not listed.
+class Ledger {
+  const Ledger({
+    required this.id,
+    required this.name,
+    required this.role,
+    this.members = const [],
+  });
+  final String id, name;
+
+  /// `owner` or `member`.
+  final String role;
+  final List<LedgerMember> members;
+  bool get isOwner => role == 'owner';
+
+  factory Ledger.fromJson(WireMap json) => Ledger(
+    id: SyncApi._string(json, 'id'),
+    name: json['name'] as String? ?? '',
+    role: json['role'] as String? ?? 'member',
+    members: [
+      for (final member in json['members'] as List? ?? const [])
+        LedgerMember.fromJson(SyncApi._object(member)),
+    ],
+  );
+  WireMap toJson() => {
+    'id': id,
+    'name': name,
+    'role': role,
+    'members': members.map((m) => m.toJson()).toList(),
+  };
+}
+
+class LedgerInvite {
+  const LedgerInvite({required this.code, required this.expiresAt});
+  final String code;
+  final DateTime expiresAt;
+}
+
+/// Bytes of an attachment and their media type.
+class AttachmentFile {
+  const AttachmentFile(this.bytes, this.contentType);
+  final Uint8List bytes;
+  final String contentType;
+}
 
 /// JSON wire objects, deliberately independent of local database models.
 typedef WireMap = Map<String, dynamic>;
@@ -48,22 +182,30 @@ class SyncApi {
     String action,
     String email,
     String password,
-  ) async => _session(await _request('POST', 'v1/auth/$action', body: {
-    'email': email.trim(),
-    'password': password,
-  }));
+  ) async => _session(
+    await _request(
+      'POST',
+      'v1/auth/$action',
+      body: {'email': email.trim(), 'password': password},
+    ),
+  );
 
-  Future<WireMap> refresh(String refreshToken) async =>
-      _session(await _request('POST', 'v1/auth/refresh', body: {
-        'refreshToken': refreshToken,
-      }));
+  Future<WireMap> refresh(String refreshToken) async => _session(
+    await _request(
+      'POST',
+      'v1/auth/refresh',
+      body: {'refreshToken': refreshToken},
+    ),
+  );
 
   /// Clear the external local session in a finally block, even when offline.
   /// An offline logout cannot revoke the server refresh token.
   Future<void> logout(String refreshToken) async {
-    await _request('POST', 'v1/auth/logout', body: {
-      'refreshToken': refreshToken,
-    });
+    await _request(
+      'POST',
+      'v1/auth/logout',
+      body: {'refreshToken': refreshToken},
+    );
   }
 
   Future<WireMap> me(String accessToken) async {
@@ -81,6 +223,7 @@ class SyncApi {
     required String deviceId,
     required List<WireMap> changes,
     bool pull = true,
+    String? ledgerId,
   }) async {
     _cursor(cursor);
     if (changes.length > 5000) {
@@ -89,8 +232,13 @@ class SyncApi {
     for (final change in changes) {
       _validateChange(change, outgoing: true);
     }
-    final page = await _request('POST', 'v1/sync', accessToken: accessToken,
-      body: _syncBody(cursor, deviceId, changes, pull));
+    final page = await _request(
+      'POST',
+      'v1/sync',
+      accessToken: accessToken,
+      body: _syncBody(cursor, deviceId, changes, pull),
+      headers: _ledger(ledgerId),
+    );
     final next = _integer(page, 'cursor');
     _cursor(next);
     if (next < cursor || page['hasMore'] is! bool || page['changes'] is! List) {
@@ -104,18 +252,21 @@ class SyncApi {
     var previousSequence = cursor;
     for (final raw in page['changes'] as List) {
       final change = _object(raw);
-      _validateChange(change);
       final sequence = _integer(change, 'sequence');
       if (sequence <= previousSequence || sequence > next) {
         throw const FormatException('Invalid change sequence');
       }
       previousSequence = sequence;
+      // An entity of a newer contract is skipped; the cursor still moves.
+      if (!syncEntities.contains(change['entity'])) continue;
+      _validateChange(change);
       records.add(change);
     }
-    if (records.isNotEmpty && previousSequence != next) {
+    final pulled = (page['changes'] as List).length;
+    if (pulled > 0 && previousSequence != next) {
       throw const FormatException('Cursor does not match the last change');
     }
-    if (records.isEmpty && next != cursor) {
+    if (pulled == 0 && next != cursor) {
       throw const FormatException('Empty page advanced the cursor');
     }
     return {...page, 'changes': records};
@@ -131,48 +282,247 @@ class SyncApi {
     required String deviceId,
     required List<WireMap> changes,
     required Future<void> Function(List<WireMap> changes, int cursor) applyPage,
+    String? ledgerId,
   }) async {
     // Copy the complete JSON snapshot before the first await so concurrent edits
     // cannot mutate a batch while it is being uploaded.
     final snapshot = (jsonDecode(jsonEncode(changes)) as List)
-        .map(_object).toList(growable: false);
+        .map(_object)
+        .toList(growable: false);
     _cursor(cursor);
     for (final change in snapshot) {
       _validateChange(change, outgoing: true);
     }
     for (var start = 0; start < snapshot.length; start += 100) {
       final end = start + 100 < snapshot.length ? start + 100 : snapshot.length;
-      await _pushBatch(accessToken, cursor, deviceId, snapshot.sublist(start, end));
+      await _pushBatch(
+        accessToken,
+        cursor,
+        deviceId,
+        snapshot.sublist(start, end),
+        ledgerId,
+      );
     }
     var next = cursor;
     while (true) {
-      final page = await sync(accessToken: await accessToken(), cursor: next,
-        deviceId: deviceId, changes: const []);
+      final page = await sync(
+        accessToken: await accessToken(),
+        cursor: next,
+        deviceId: deviceId,
+        changes: const [],
+        ledgerId: ledgerId,
+      );
       next = page['cursor'] as int;
       await applyPage((page['changes'] as List).cast<WireMap>(), next);
       if (page['hasMore'] == false) return next;
     }
   }
 
-  Future<void> _pushBatch(AccessTokenProvider token, int cursor, String deviceId,
-      List<WireMap> changes) async {
-    final size = utf8.encode(jsonEncode(_syncBody(cursor, deviceId, changes, false))).length;
+  Future<void> _pushBatch(
+    AccessTokenProvider token,
+    int cursor,
+    String deviceId,
+    List<WireMap> changes,
+    String? ledgerId,
+  ) async {
+    final size = utf8
+        .encode(jsonEncode(_syncBody(cursor, deviceId, changes, false)))
+        .length;
     if (size > 1500000 && changes.length > 1) {
       final middle = changes.length ~/ 2;
-      await _pushBatch(token, cursor, deviceId, changes.sublist(0, middle));
-      await _pushBatch(token, cursor, deviceId, changes.sublist(middle));
+      await _pushBatch(
+        token,
+        cursor,
+        deviceId,
+        changes.sublist(0, middle),
+        ledgerId,
+      );
+      await _pushBatch(
+        token,
+        cursor,
+        deviceId,
+        changes.sublist(middle),
+        ledgerId,
+      );
       return;
     }
-    await sync(accessToken: await token(), cursor: cursor, deviceId: deviceId,
-      changes: changes, pull: false);
+    await sync(
+      accessToken: await token(),
+      cursor: cursor,
+      deviceId: deviceId,
+      changes: changes,
+      pull: false,
+      ledgerId: ledgerId,
+    );
   }
 
-  Future<WireMap> _request(String method, String path, {
+  /// `GET /v1/capabilities` without authorization; [ServerCapabilities.v1]
+  /// when the server does not know the route (404).
+  Future<ServerCapabilities> capabilities() async {
+    try {
+      return ServerCapabilities.fromJson(
+        await _request('GET', 'v1/capabilities'),
+      );
+    } on SyncApiException catch (e) {
+      if (e.statusCode == 404) return ServerCapabilities.v1;
+      rethrow;
+    }
+  }
+
+  /// Shared ledgers of the user; the personal one is not listed.
+  Future<List<Ledger>> ledgers(String accessToken) async {
+    final result = await _request(
+      'GET',
+      'v1/ledgers',
+      accessToken: accessToken,
+    );
+    final items = result['ledgers'];
+    if (items is! List) throw const FormatException('Invalid ledgers');
+    return [for (final item in items) Ledger.fromJson(_object(item))];
+  }
+
+  Future<Ledger> createLedger(String accessToken, String name) async =>
+      Ledger.fromJson(
+        await _request(
+          'POST',
+          'v1/ledgers',
+          accessToken: accessToken,
+          body: {'name': name},
+        ),
+      );
+
+  Future<Ledger?> renameLedger(
+    String accessToken,
+    String id,
+    String name,
+  ) async {
+    final result = await _request(
+      'PATCH',
+      'v1/ledgers/${_segment(id)}',
+      accessToken: accessToken,
+      body: {'name': name},
+    );
+    return result.containsKey('id') ? Ledger.fromJson(result) : null;
+  }
+
+  /// Owner only: removes the ledger with all its records and files.
+  Future<void> deleteLedger(String accessToken, String id) async {
+    await _request(
+      'DELETE',
+      'v1/ledgers/${_segment(id)}',
+      accessToken: accessToken,
+    );
+  }
+
+  /// Owner only: a one-time code of 10 characters, valid for 7 days.
+  Future<LedgerInvite> createInvite(String accessToken, String id) async {
+    final result = await _request(
+      'POST',
+      'v1/ledgers/${_segment(id)}/invites',
+      accessToken: accessToken,
+    );
+    return LedgerInvite(
+      code: _string(result, 'code'),
+      expiresAt: DateTime.parse(_string(result, 'expiresAt')),
+    );
+  }
+
+  Future<Ledger> joinLedger(String accessToken, String code) async =>
+      Ledger.fromJson(
+        await _request(
+          'POST',
+          'v1/ledgers/join',
+          accessToken: accessToken,
+          body: {'code': code.trim()},
+        ),
+      );
+
+  /// The owner removes a member; a member passes its own id to leave.
+  Future<void> removeLedgerMember(
+    String accessToken,
+    String id,
+    String userId,
+  ) async {
+    await _request(
+      'DELETE',
+      'v1/ledgers/${_segment(id)}/members/${_segment(userId)}',
+      accessToken: accessToken,
+    );
+  }
+
+  /// PUT of the file bytes; true when the server stored them now (201),
+  /// false when it already had them (200).
+  Future<bool> uploadAttachment({
+    required String accessToken,
+    required String sha256,
+    required List<int> bytes,
+    required String contentType,
+    String? ledgerId,
+  }) async {
+    _sha256(sha256);
+    final request = http.Request(
+      'PUT',
+      baseUri.resolve('v1/attachments/$sha256'),
+    );
+    request.headers.addAll({
+      'Authorization': 'Bearer $accessToken',
+      'Content-Type': contentType,
+      ..._ledger(ledgerId),
+    });
+    request.bodyBytes = bytes;
+    final response = await _send(request);
+    return response.statusCode == 201;
+  }
+
+  /// GET of the file bytes; [SyncApiException] with 404 when the ledger
+  /// has no such file.
+  Future<AttachmentFile> downloadAttachment({
+    required String accessToken,
+    required String sha256,
+    String? ledgerId,
+  }) async {
+    _sha256(sha256);
+    final request = http.Request(
+      'GET',
+      baseUri.resolve('v1/attachments/$sha256'),
+    );
+    request.headers.addAll({
+      'Authorization': 'Bearer $accessToken',
+      ..._ledger(ledgerId),
+    });
+    final response = await _send(request);
+    return AttachmentFile(
+      response.bodyBytes,
+      (response.headers['content-type'] ?? 'application/octet-stream')
+          .split(';')
+          .first
+          .trim(),
+    );
+  }
+
+  static void _sha256(String value) {
+    if (!RegExp(r'^[0-9a-f]{64}$').hasMatch(value)) {
+      throw ArgumentError('Invalid SHA-256');
+    }
+  }
+
+  static String _segment(String value) {
+    if (value.isEmpty) throw ArgumentError('Empty path segment');
+    return Uri.encodeComponent(value);
+  }
+
+  static Map<String, String> _ledger(String? ledgerId) =>
+      ledgerId == null ? const {} : {ledgerHeader: ledgerId};
+
+  Future<WireMap> _request(
+    String method,
+    String path, {
     WireMap? body,
     String? accessToken,
+    Map<String, String> headers = const {},
   }) async {
     final request = http.Request(method, baseUri.resolve(path));
-    request.followRedirects = false;
+    request.headers.addAll(headers);
     request.headers['Accept'] = 'application/json';
     if (accessToken != null) {
       request.headers['Authorization'] = 'Bearer $accessToken';
@@ -184,6 +534,17 @@ class SyncApi {
         throw ArgumentError('Request exceeds the server 2 MiB limit');
       }
     }
+    final response = await _send(request);
+    if (response.statusCode == 204 || response.bodyBytes.isEmpty) {
+      return <String, dynamic>{};
+    }
+    return _object(jsonDecode(utf8.decode(response.bodyBytes)));
+  }
+
+  /// Sends without following redirects; a non-2xx status becomes a
+  /// [SyncApiException] with the server's error code.
+  Future<http.Response> _send(http.Request request) async {
+    request.followRedirects = false;
     final response = await (() async {
       final stream = await _client.send(request);
       return http.Response.fromStream(stream);
@@ -200,17 +561,23 @@ class SyncApi {
       }
       throw SyncApiException(code, message, statusCode: response.statusCode);
     }
-    if (response.statusCode == 204) return <String, dynamic>{};
-    return _object(jsonDecode(utf8.decode(response.bodyBytes)));
+    return response;
   }
 
   void close() {
     if (_ownsClient) _client.close();
   }
 
-  static WireMap _syncBody(int cursor, String deviceId,
-      List<WireMap> changes, bool pull) => {
-    'cursor': cursor, 'deviceId': deviceId, 'changes': changes, 'pull': pull,
+  static WireMap _syncBody(
+    int cursor,
+    String deviceId,
+    List<WireMap> changes,
+    bool pull,
+  ) => {
+    'cursor': cursor,
+    'deviceId': deviceId,
+    'changes': changes,
+    'pull': pull,
   };
 
   static WireMap _session(WireMap value) {
@@ -224,7 +591,7 @@ class SyncApi {
   }
 
   static void _validateChange(WireMap change, {bool outgoing = false}) {
-    if (!const {'transaction', 'category', 'budget'}.contains(change['entity'])) {
+    if (!syncEntities.contains(change['entity'])) {
       throw const FormatException('Unknown sync entity');
     }
     final id = _string(change, 'id');
@@ -236,7 +603,15 @@ class SyncApi {
       _object(change['payload']);
     }
     if (outgoing) {
-      const keys = {'entity', 'id', 'deleted', 'updatedAt', 'payload', 'version', 'sequence'};
+      const keys = {
+        'entity',
+        'id',
+        'deleted',
+        'updatedAt',
+        'payload',
+        'version',
+        'sequence',
+      };
       if (change.keys.any((key) => !keys.contains(key))) {
         throw const FormatException('Unknown change property');
       }
@@ -277,10 +652,16 @@ class SyncApi {
 
   static Uri _normalizeServer(String value, bool allowInsecureHttp) {
     final uri = Uri.parse(value.trim());
-    if (!uri.hasAuthority || uri.host.isEmpty || uri.userInfo.isNotEmpty ||
-        uri.hasQuery || uri.hasFragment ||
-        !(uri.scheme == 'https' || (allowInsecureHttp && uri.scheme == 'http'))) {
-      throw ArgumentError('Use an HTTPS server URL without credentials, query or fragment');
+    if (!uri.hasAuthority ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment ||
+        !(uri.scheme == 'https' ||
+            (allowInsecureHttp && uri.scheme == 'http'))) {
+      throw ArgumentError(
+        'Use an HTTPS server URL without credentials, query or fragment',
+      );
     }
     return uri.replace(path: '${uri.path.replaceAll(RegExp(r'/+$'), '')}/');
   }
