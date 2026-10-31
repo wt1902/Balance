@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 import 'package:quick_actions/quick_actions.dart';
+import '../domain/analytics.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
 import '../domain/templates.dart';
@@ -81,7 +82,12 @@ class BalanceShell extends StatefulWidget {
 class _BalanceShellState extends State<BalanceShell> {
   AppStore get store => widget.store;
   int page = 0;
-  int months = 1;
+
+  /// `1`, `3`, `12` months, `year` or `custom`.
+  String analyticsMode = '1';
+  int reportYear = DateTime.now().year;
+  AnalyticsPeriod? customPeriod;
+  String? trendCategory;
   TransactionFilter listFilter = const TransactionFilter();
   final searchController = TextEditingController();
   final searchFocus = FocusNode();
@@ -956,7 +962,12 @@ class _BalanceShellState extends State<BalanceShell> {
     ];
   }
 
-  Widget spending(DateTime start, DateTime end, {int? limit}) {
+  Widget spending(
+    DateTime start,
+    DateTime end, {
+    int? limit,
+    void Function(String name)? onCategory,
+  }) {
     var groups = FinanceMath.spending(store.transactions, start, end);
     if (limit != null) groups = groups.take(limit).toList();
     final total = FinanceMath.summary(
@@ -975,53 +986,57 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         children: [
           for (final g in groups)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 16),
-              child: Row(
-                children: [
-                  CategoryAvatar(
-                    icon: g.icon,
-                    emoji: g.emoji,
-                    color: g.colorName,
-                    size: 36,
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                g.name,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            Text(
-                              money(g.amountMinor, store.currency),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        LinearProgressIndicator(
-                          value: total == 0 ? 0 : g.amountMinor / total,
-                          borderRadius: BorderRadius.circular(8),
-                          minHeight: 5,
-                          color: categoryColors[g.colorName],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${total == 0 ? 0 : (g.amountMinor / total * 100).round()}% расходов',
-                          style: Theme.of(context).textTheme.labelSmall,
-                        ),
-                      ],
+            InkWell(
+              onTap: onCategory == null ? null : () => onCategory(g.name),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  children: [
+                    CategoryAvatar(
+                      icon: g.icon,
+                      emoji: g.emoji,
+                      color: g.colorName,
+                      size: 36,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  g.name,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              Text(
+                                money(g.amountMinor, store.currency),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            value: total == 0 ? 0 : g.amountMinor / total,
+                            borderRadius: BorderRadius.circular(8),
+                            minHeight: 5,
+                            color: categoryColors[g.colorName],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '${total == 0 ? 0 : (g.amountMinor / total * 100).round()}% расходов',
+                            style: Theme.of(context).textTheme.labelSmall,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
@@ -1029,33 +1044,122 @@ class _BalanceShellState extends State<BalanceShell> {
     );
   }
 
+  AnalyticsPeriod analyticsPeriod(DateTime now) => switch (analyticsMode) {
+    'year' => AnalyticsPeriod.year(reportYear),
+    'custom' => customPeriod ?? AnalyticsPeriod.months(1, now),
+    _ => AnalyticsPeriod.months(int.parse(analyticsMode), now),
+  };
+
+  String rangeTitle(DateTime start, DateTime endExclusive) {
+    final last = DateTime(
+      endExclusive.year,
+      endExclusive.month,
+      endExclusive.day - 1,
+    );
+    final format = DateFormat('d MMM y', 'ru');
+    return DateUtils.isSameDay(start, last)
+        ? format.format(start)
+        : '${format.format(start)} – ${format.format(last)}';
+  }
+
+  Future<void> pickAnalyticsRange() async {
+    final now = DateTime.now();
+    final current = customPeriod;
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2000),
+      lastDate: DateTime(now.year + 5),
+      initialDateRange: current == null
+          ? null
+          : DateTimeRange(
+              start: current.start,
+              end: DateTime(
+                current.endExclusive.year,
+                current.endExclusive.month,
+                current.endExclusive.day - 1,
+              ),
+            ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      customPeriod = AnalyticsPeriod.custom(
+        picked.start,
+        DateTime(picked.end.year, picked.end.month, picked.end.day + 1),
+      );
+      analyticsMode = 'custom';
+    });
+  }
+
   List<Widget> analytics() {
     final now = DateTime.now();
-    final start = DateTime(now.year, now.month - months + 1);
-    final end = DateTime(now.year, now.month + 1);
+    final period = analyticsPeriod(now);
+    final start = period.start;
+    final end = period.endExclusive;
     final sum = FinanceMath.summary(store.transactions, start, end);
     final grouped = FinanceMath.spending(store.transactions, start, end);
     final saving = sum.incomeMinor > 0
         ? sum.balanceMinor / sum.incomeMinor * 100
         : 0.0;
-    final days =
-        (DateTime.utc(now.year, now.month, now.day)
-                    .difference(
-                      DateTime.utc(start.year, start.month, start.day),
-                    )
-                    .inDays +
-                1)
-            .clamp(1, 10000);
+    final days = period.elapsedDays(now).clamp(1, 1000000);
     return [
-      SegmentedButton<int>(
-        segments: const [
-          ButtonSegment(value: 1, label: Text('Месяц')),
-          ButtonSegment(value: 3, label: Text('3 месяца')),
-          ButtonSegment(value: 12, label: Text('12 месяцев')),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          for (final e in {
+            '1': 'Месяц',
+            '3': '3 месяца',
+            '12': '12 месяцев',
+            'year': 'Год',
+          }.entries)
+            ChoiceChip(
+              label: Text(e.value),
+              selected: analyticsMode == e.key,
+              onSelected: (_) => setState(() => analyticsMode = e.key),
+            ),
+          ChoiceChip(
+            avatar: const Icon(Icons.date_range, size: 18),
+            label: const Text('Период'),
+            selected: analyticsMode == 'custom',
+            onSelected: (_) => customPeriod == null
+                ? pickAnalyticsRange()
+                : setState(() => analyticsMode = 'custom'),
+          ),
         ],
-        selected: {months},
-        onSelectionChanged: (s) => setState(() => months = s.first),
       ),
+      if (analyticsMode == 'year') ...[
+        const SizedBox(height: 12),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              tooltip: 'Предыдущий год',
+              onPressed: () => setState(() => reportYear--),
+              icon: const Icon(Icons.chevron_left),
+            ),
+            Text('$reportYear', style: Theme.of(context).textTheme.titleMedium),
+            IconButton(
+              tooltip: 'Следующий год',
+              onPressed: reportYear >= now.year
+                  ? null
+                  : () => setState(() => reportYear++),
+              icon: const Icon(Icons.chevron_right),
+            ),
+          ],
+        ),
+      ],
+      if (analyticsMode == 'custom') ...[
+        const SizedBox(height: 12),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: InputChip(
+            avatar: const Icon(Icons.edit_calendar_outlined, size: 18),
+            label: Text(rangeTitle(start, end)),
+            tooltip: 'Изменить период',
+            onPressed: pickAnalyticsRange,
+          ),
+        ),
+      ],
       const SizedBox(height: 20),
       metricRow([
         Metric(
@@ -1098,6 +1202,19 @@ class _BalanceShellState extends State<BalanceShell> {
         ),
       ]),
       const SizedBox(height: 28),
+      sectionTitle('Сравнение с прошлым периодом'),
+      comparison(PeriodComparison.of(store.transactions, period, now)),
+      if (analyticsMode == '1') ...[
+        const SizedBox(height: 28),
+        sectionTitle('Прогноз до конца месяца'),
+        forecast(now),
+      ],
+      if (analyticsMode == 'year') ...[
+        const SizedBox(height: 28),
+        sectionTitle('Итоги года'),
+        yearReport(YearReport.of(store.transactions, reportYear, now)),
+      ],
+      const SizedBox(height: 28),
       sectionTitle('Динамика доходов и расходов'),
       trend(start, end),
       const SizedBox(height: 28),
@@ -1119,48 +1236,300 @@ class _BalanceShellState extends State<BalanceShell> {
         ),
         const SizedBox(height: 16),
       ],
-      spending(start, end),
+      spending(
+        start,
+        end,
+        onCategory: (name) => setState(() => trendCategory = name),
+      ),
+      const SizedBox(height: 28),
+      sectionTitle('Динамика категории'),
+      categoryTrend(period, grouped),
     ];
   }
 
-  Widget trend(DateTime start, DateTime end) {
-    final buckets = <(DateTime, DateTime, String)>[];
-    if (months == 1) {
-      for (
-        var d = start;
-        d.isBefore(end);
-        d = DateTime(d.year, d.month, d.day + 1)
-      ) {
-        buckets.add((d, DateTime(d.year, d.month, d.day + 1), '${d.day}'));
-      }
-    } else if (months == 3) {
-      for (
-        var d = DateTime(
-          start.year,
-          start.month,
-          start.day - start.weekday + 1,
-        );
-        d.isBefore(end);
-        d = DateTime(d.year, d.month, d.day + 7)
-      ) {
-        final e = DateTime(d.year, d.month, d.day + 7);
-        buckets.add((
-          d.isBefore(start) ? start : d,
-          e.isAfter(end) ? end : e,
-          DateFormat('d.MM').format(d),
-        ));
-      }
-    } else {
-      for (var d = start; d.isBefore(end); d = DateTime(d.year, d.month + 1)) {
-        buckets.add((
-          d,
-          DateTime(d.year, d.month + 1),
-          DateFormat('MMM', 'ru').format(d),
-        ));
-      }
+  Widget comparison(PeriodComparison c) {
+    final format = DateFormat('d MMM', 'ru');
+    String range(DateTime s, DateTime e) {
+      final last = DateTime(e.year, e.month, e.day - 1);
+      return DateUtils.isSameDay(s, last)
+          ? format.format(s)
+          : '${format.format(s)} – ${format.format(last)}';
     }
+
+    Widget line(int? change, String text, Color color) => Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Icon(
+            change == null || change == 0
+                ? Icons.trending_flat
+                : change > 0
+                ? Icons.trending_up
+                : Icons.trending_down,
+            color: color,
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text(text)),
+        ],
+      ),
+    );
+
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          line(c.expensesChange, c.expensesText, Colors.deepOrange),
+          line(c.incomeChange, c.incomeText, Colors.teal),
+          Text(
+            '${c.partial ? 'Пока период идёт, сравниваются одинаковые сроки: ' : ''}'
+            '${range(c.currentStart, c.currentEnd)} и '
+            '${range(c.previousStart, c.previousEnd)}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget forecast(DateTime now) {
+    final f = MonthForecast.of(store.transactions, now);
+    final budget = BudgetForecast.total(store.budgets, store.transactions, now);
+    final day = budget?.exhaustionDay;
+    final danger = budget != null && (budget.exceeded || day != null);
+    return Column(
+      children: [
+        metricRow([
+          Metric(
+            label: 'Ожидаемые расходы за месяц',
+            value: money(f.projectedMinor, store.currency),
+            icon: Icons.query_stats,
+            color: Colors.deepOrange,
+          ),
+          Metric(
+            label: 'Темп трат в день',
+            value: money(f.dailyPaceMinor, store.currency),
+            icon: Icons.speed,
+          ),
+        ]),
+        if (budget != null) ...[
+          const SizedBox(height: 16),
+          Panel(
+            child: Row(
+              children: [
+                Icon(
+                  danger ? Icons.warning_amber_rounded : Icons.check_circle,
+                  color: danger
+                      ? Theme.of(context).colorScheme.error
+                      : Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    '${budget.exceeded
+                        ? 'Бюджеты месяца уже исчерпаны'
+                        : day != null
+                        ? 'При текущем темпе бюджет закончится $day-го'
+                        : 'При текущем темпе бюджета хватит до конца месяца'}. '
+                    'Потрачено ${money(budget.usedMinor, store.currency)} '
+                    'из ${money(budget.limitMinor, store.currency)}.',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget yearReport(YearReport r) {
+    String month(MonthlyTotal? m) => m == null
+        ? '—'
+        : toBeginningOfSentenceCase(DateFormat('LLLL', 'ru').format(m.month));
+    return Column(
+      children: [
+        metricRow([
+          Metric(
+            label: 'Расходы в среднем за месяц',
+            value: money(r.averageMonthlyExpensesMinor, store.currency),
+            icon: Icons.north_east,
+            color: Colors.deepOrange,
+          ),
+          Metric(
+            label: 'Доходы в среднем за месяц',
+            value: money(r.averageMonthlyIncomeMinor, store.currency),
+            icon: Icons.south_west,
+            color: Colors.teal,
+          ),
+        ]),
+        const SizedBox(height: 16),
+        metricRow([
+          Metric(
+            label: 'Самый затратный месяц',
+            value: month(r.topExpenseMonth),
+            icon: Icons.local_fire_department_outlined,
+          ),
+          Metric(
+            label: 'Самый доходный месяц',
+            value: month(r.topIncomeMonth),
+            icon: Icons.emoji_events_outlined,
+          ),
+        ]),
+      ],
+    );
+  }
+
+  Widget categoryTrend(
+    AnalyticsPeriod period,
+    List<CategorySpending> inPeriod,
+  ) {
+    final through = DateTime(
+      period.endExclusive.year,
+      period.endExclusive.month,
+      period.endExclusive.day - 1,
+    );
+    final first = DateTime(through.year, through.month - 11);
+    final names = [
+      for (final g in inPeriod) g.name,
+      for (final g in FinanceMath.spending(
+        store.transactions,
+        first,
+        DateTime(through.year, through.month + 1),
+      ))
+        if (!inPeriod.any((p) => p.name == g.name)) g.name,
+    ];
+    if (names.isEmpty) {
+      return const EmptyView(
+        title: 'Расходов пока нет',
+        subtitle: 'Здесь появится динамика трат по выбранной категории.',
+        icon: Icons.show_chart,
+      );
+    }
+    final name = names.contains(trendCategory) ? trendCategory! : names.first;
+    final series = Analytics.categoryTrend(store.transactions, name, through);
+    final total = series.fold(0, (s, m) => s + m.amountMinor);
+    final active = series.where((m) => m.amountMinor > 0).length;
+    var max = 1;
+    for (final m in series) {
+      if (m.amountMinor > max) max = m.amountMinor;
+    }
+    final color =
+        categoryColors[store.transactions
+            .firstWhere((t) => t.categoryName == name)
+            .categoryColorName] ??
+        Theme.of(context).colorScheme.primary;
+    return Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          DropdownButtonFormField<String>(
+            key: ValueKey('trend-$name'),
+            initialValue: name,
+            isExpanded: true,
+            decoration: const InputDecoration(labelText: 'Категория'),
+            items: [
+              for (final n in names)
+                DropdownMenuItem(
+                  value: n,
+                  child: Text(n, overflow: TextOverflow.ellipsis),
+                ),
+            ],
+            onChanged: (v) => setState(() => trendCategory = v),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'За 12 месяцев: ${money(total, store.currency)} · в среднем '
+            '${money(active == 0 ? 0 : (total / active).round(), store.currency)} '
+            'в месяц с тратами',
+          ),
+          const SizedBox(height: 20),
+          SizedBox(
+            height: 170,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                for (int i = 0; i < series.length; i++)
+                  Expanded(
+                    child: Tooltip(
+                      message:
+                          '${toBeginningOfSentenceCase(DateFormat('LLLL y', 'ru').format(series[i].month))}\n${money(series[i].amountMinor, store.currency)}',
+                      child: Semantics(
+                        label:
+                            '${DateFormat('LLLL y', 'ru').format(series[i].month)}, ${money(series[i].amountMinor, store.currency)}',
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 3,
+                              ),
+                              child: Container(
+                                height: (series[i].amountMinor / max * 130)
+                                    .clamp(2, 130)
+                                    .toDouble(),
+                                decoration: BoxDecoration(
+                                  color: series[i].amountMinor == 0
+                                      ? Theme.of(
+                                          context,
+                                        ).colorScheme.surfaceContainerHighest
+                                      : color,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              height: 24,
+                              child: i.isEven
+                                  ? Text(
+                                      DateFormat(
+                                        'MMM',
+                                        'ru',
+                                      ).format(series[i].month),
+                                      style: const TextStyle(fontSize: 10),
+                                      maxLines: 1,
+                                    )
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget trend(DateTime start, DateTime end) {
+    final buckets = TrendBucket.of(start, end);
+    final last = DateTime(end.year, end.month, end.day - 1);
+    final dayFormat = start.month == last.month && start.year == last.year
+        ? DateFormat('d')
+        : DateFormat('d.MM');
+    final monthFormat = start.year == last.year
+        ? DateFormat('MMM', 'ru')
+        : DateFormat('MM.yy');
+    String label(TrendBucket b) => switch (b.size) {
+      BucketSize.day => dayFormat.format(b.start),
+      BucketSize.week => DateFormat('d.MM').format(b.start),
+      BucketSize.month => monthFormat.format(b.start),
+    };
+    String title(TrendBucket b) => switch (b.size) {
+      BucketSize.day => DateFormat('d MMM y', 'ru').format(b.start),
+      BucketSize.week => rangeTitle(b.start, b.endExclusive),
+      BucketSize.month => toBeginningOfSentenceCase(
+        DateFormat('LLLL y', 'ru').format(b.start),
+      ),
+    };
     final summaries = buckets
-        .map((b) => FinanceMath.summary(store.transactions, b.$1, b.$2))
+        .map(
+          (b) =>
+              FinanceMath.summary(store.transactions, b.start, b.endExclusive),
+        )
         .toList();
     var max = 1;
     for (final s in summaries) {
@@ -1188,10 +1557,10 @@ class _BalanceShellState extends State<BalanceShell> {
                   Expanded(
                     child: Tooltip(
                       message:
-                          '${DateFormat('d MMM', 'ru').format(buckets[i].$1)}\nДоходы: ${money(summaries[i].incomeMinor, store.currency)}\nРасходы: ${money(summaries[i].expensesMinor, store.currency)}',
+                          '${title(buckets[i])}\nДоходы: ${money(summaries[i].incomeMinor, store.currency)}\nРасходы: ${money(summaries[i].expensesMinor, store.currency)}',
                       child: Semantics(
                         label:
-                            '${buckets[i].$3}, доходы ${money(summaries[i].incomeMinor, store.currency)}, расходы ${money(summaries[i].expensesMinor, store.currency)}',
+                            '${title(buckets[i])}, доходы ${money(summaries[i].incomeMinor, store.currency)}, расходы ${money(summaries[i].expensesMinor, store.currency)}',
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -1238,7 +1607,7 @@ class _BalanceShellState extends State<BalanceShell> {
                               height: 24,
                               child: i % ((buckets.length / 8).ceil()) == 0
                                   ? Text(
-                                      buckets[i].$3,
+                                      label(buckets[i]),
                                       style: const TextStyle(fontSize: 10),
                                       maxLines: 1,
                                     )
@@ -1322,6 +1691,11 @@ class _BalanceShellState extends State<BalanceShell> {
 
   Widget budgetCard(BudgetRecord b) {
     final used = FinanceMath.budgetUsed(b, store.transactions);
+    final runsOut = BudgetForecast.of(
+      b,
+      store.transactions,
+      DateTime.now(),
+    )?.exhaustionDay;
     final ratio = b.limitMinor > 0 ? used / b.limitMinor : 0.0;
     final color = b.limitMinor <= 0 || ratio >= 1
         ? Theme.of(context).colorScheme.error
@@ -1388,6 +1762,22 @@ class _BalanceShellState extends State<BalanceShell> {
                 : 'Осталось: ${money(b.limitMinor - used, store.currency)}',
             style: TextStyle(color: color),
           ),
+          if (runsOut != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 18,
+                  color: Colors.orange,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text('При текущем темпе лимит закончится $runsOut-го'),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

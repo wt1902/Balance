@@ -171,6 +171,10 @@ Flutter-only, device-local, off by default; the permission is requested when a s
 
 Flutter-only. Beyond the native search and all/income/expense filter: a filter sheet (period presets or a custom half-open range, inclusive amount bounds, categories by name), date and amount sorts, removable active-filter chips with a count, a «Найдено» line with income/expense totals, and per-day panels with day totals that exclude balance adjustments like period analytics does. Amount sorts show undated slices of 50; the list stays lazy either way.
 
+## Analytics 4.2
+
+Flutter-only, computed in `lib/domain/analytics.dart` with the shared rules (adjustments excluded, half-open local intervals, categories by name). Beyond the native 1/3/12-month selector: a calendar year with a year picker and a custom date range. Comparison with the previous period of the same length; while a period is ongoing both sides cover the same elapsed days (the previous side is clipped to its own end). Current-month forecast = spending to date / elapsed days × days in month + expenses already dated later this month; a budget run-out day uses the pace up to today and all spending of the month, shown on analytics (all budgets of the month) and on each budget card. Year report: monthly averages over started months, top expense and income months. One-category trend: 12 monthly expense totals through the period's last month. Trend buckets: days up to 45 days, Monday weeks up to 130, months beyond. Native clients have none of these.
+
 ## Desktop 4.2
 
 Keyboard shortcuts (Ctrl on Linux/Windows/Web, ⌘ on macOS): N new transaction, F search, 1–5 pages, L lock now; listed in Settings on desktop and Web. They are bound on the shell, so they do not fire over an open dialog or under the app lock. The window title is «Баланс».
