@@ -276,3 +276,19 @@ money math: every sum comes from `AppStore` (`baseTransactions`,
   reports `ledgers`; personal + shared list with switch, create, rename,
   invite code (copy, expiry), join, members (owner removes), leave, delete.
 
+## Receipt scanning
+
+The new expense editor on Android and iOS reads the amount and local date and
+time from the QR code of a Russian fiscal purchase receipt. The scanner opens
+an editable draft in RUB. Confirming the draft saves an ordinary expense
+through `AppStore`. The camera and QR parsing work locally and don't require
+server attachment support.
+
+The Flutter expense editor can also read electronic Russian receipt PDFs
+locally with PDFium. The preview shows the quantity, unit price and line
+total, and flags any difference from the receipt total. The user can edit
+the preview and then save one expense with the items in its note.
+The transaction menu opens saved receipt items on a dedicated screen, using
+a table on wide screens and a list on phones. It also reads notes saved by
+earlier versions of the PDF importer.
+

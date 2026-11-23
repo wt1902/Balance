@@ -202,6 +202,10 @@ flutter test
 bash scripts/build.sh web        # android | ios | macos | windows | linux
 ```
 
+- Android debug (`flutter build apk --debug`) устанавливается отдельно
+  как «Balance Debug» (`com.balance.balance.debug`). Идентификатор релиза —
+  `com.balance.balance`.
+
 - Тесты не должны зависеть от текущей даты, локали и часового пояса
   машины; часовой пояс проверялся и с `TZ=Europe/Moscow`.
 - `test/screenshots_test.dart` пишет PNG в `/tmp/balance-ui` — это
