@@ -1,7 +1,7 @@
 import 'package:file_selector/file_selector.dart';
+import '../l10n/app_strings.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../domain/backup.dart';
@@ -97,10 +97,10 @@ Future<List<TransactionRecord>?> runStatementImport(
   } else {
     final table = StatementImport.parseCsv(text);
     if (table.length < 2) {
-      throw const FormatException('В файле нет операций');
+      throw FormatException(uiText('В файле нет операций'));
     }
     var mapping = StatementImport.tbankMapping(table.first);
-    var format = 'Т-Банк, CSV';
+    var format = uiText('Т-Банк, CSV');
     if (StatementImport.isBalanceExport(table.first)) {
       result = StatementImport.readBalanceCsv(table);
     } else {
@@ -128,8 +128,8 @@ Future<List<TransactionRecord>?> _preview(
   if (result.rows.isEmpty) {
     throw FormatException(
       result.problems.isEmpty
-          ? 'Операции не найдены'
-          : 'Операции не найдены. ${result.problems.first}',
+          ? uiText('Операции не найдены')
+          : uiText('Операции не найдены. {0}', [result.problems.first]),
     );
   }
   if (!context.mounted) return null;
@@ -152,7 +152,7 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
   List<String> get header => widget.table.first;
   String columnName(int index) {
     final name = index < header.length ? header[index].trim() : '';
-    return name.isEmpty ? 'Колонка ${index + 1}' : name;
+    return name.isEmpty ? uiText('Колонка {0}', [index + 1]) : name;
   }
 
   int get columns =>
@@ -169,7 +169,7 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
     decoration: InputDecoration(labelText: label),
     items: [
       if (optional)
-        const DropdownMenuItem<int?>(value: null, child: Text('Нет')),
+        DropdownMenuItem<int?>(value: null, child: Text(uiText('Нет'))),
       for (var i = 0; i < columns; i++)
         DropdownMenuItem<int?>(
           value: i,
@@ -191,29 +191,31 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         automaticallyImplyLeading: false,
-        title: const Text('Колонки выписки'),
+        title: Text(uiText('Колонки выписки')),
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
         children: [
-          const Text(
-            'Формат банка не распознан. Укажите, где дата, сумма и описание.',
+          Text(
+            uiText(
+              'Формат банка не распознан. Укажите, где дата, сумма и описание.',
+            ),
           ),
           const SizedBox(height: 20),
           column(
-            'Дата',
+            uiText('Дата'),
             mapping.date,
             (v) => setState(() => mapping = mapping.copyWith(date: v)),
           ),
           const SizedBox(height: 12),
           column(
-            'Сумма',
+            uiText('Сумма'),
             mapping.amount,
             (v) => setState(() => mapping = mapping.copyWith(amount: v)),
           ),
           const SizedBox(height: 12),
           column(
-            'Описание',
+            uiText('Описание'),
             mapping.description,
             (v) => setState(
               () => mapping = mapping.copyWith(description: () => v),
@@ -222,7 +224,7 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
           ),
           const SizedBox(height: 12),
           column(
-            'Категория банка',
+            uiText('Категория банка'),
             mapping.category,
             (v) =>
                 setState(() => mapping = mapping.copyWith(category: () => v)),
@@ -231,13 +233,13 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
           const SizedBox(height: 8),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Расходы указаны положительными числами'),
+            title: Text(uiText('Расходы указаны положительными числами')),
             value: mapping.invertSign,
             onChanged: (v) =>
                 setState(() => mapping = mapping.copyWith(invertSign: v)),
           ),
           const SizedBox(height: 12),
-          Text('Первые строки', style: theme.textTheme.titleMedium),
+          Text(uiText('Первые строки'), style: theme.textTheme.titleMedium),
           const SizedBox(height: 8),
           for (final row in preview.rows)
             _RowPreview(row: row, currency: 'RUB'),
@@ -255,13 +257,13 @@ class _CsvMappingDialogState extends State<CsvMappingDialog> {
         children: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: preview.rows.isEmpty
                 ? null
                 : () => Navigator.pop(context, mapping),
-            child: const Text('Далее'),
+            child: Text(uiText('Далее')),
           ),
         ],
       ),
@@ -280,8 +282,8 @@ class _RowPreview extends StatelessWidget {
       children: [
         Expanded(
           child: Text(
-            '${DateFormat('dd.MM.yyyy', 'ru').format(row.date)} · '
-            '${row.description.isEmpty ? 'Без описания' : row.description}',
+            '${localDateFormat('dd.MM.yyyy').format(row.date)} · '
+            '${row.description.isEmpty ? uiText('Без описания') : row.description}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -396,7 +398,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                   color: category.colorName,
                   size: 36,
                 ),
-                title: Text(category.name),
+                title: Text(categoryTitle(category.name)),
                 selected: category.name == item.category.name,
                 onTap: () => Navigator.pop(context, category),
               ),
@@ -420,7 +422,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         automaticallyImplyLeading: false,
-        title: const Text('Импорт выписки'),
+        title: Text(uiText('Импорт выписки')),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -430,21 +432,31 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${result.format} · операций: ${items.length}'),
-                if (known > 0) Text('Уже импортированы раньше: $known'),
+                Text(
+                  uiText('{0} · операций: {1}', [result.format, items.length]),
+                ),
+                if (known > 0)
+                  Text(uiText('Уже импортированы раньше: {0}', [known])),
                 if (duplicates > 0)
                   Text(
-                    'Похожи на уже записанные: $duplicates — проверьте и отметьте вручную',
+                    uiText(
+                      'Похожи на уже записанные: {0} — проверьте и отметьте вручную',
+                      [duplicates],
+                    ),
                   ),
                 if (result.skipped > 0)
                   Text(
-                    'Пропущены (отклонённые или нулевые): ${result.skipped}',
+                    uiText('Пропущены (отклонённые или нулевые): {0}', [
+                      result.skipped,
+                    ]),
                   ),
                 if (result.problems.isNotEmpty)
                   ExpansionTile(
                     tilePadding: EdgeInsets.zero,
                     title: Text(
-                      'Не удалось прочитать строк: ${result.problems.length}',
+                      uiText('Не удалось прочитать строк: {0}', [
+                        result.problems.length,
+                      ]),
                       style: TextStyle(color: theme.colorScheme.error),
                     ),
                     children: [
@@ -455,13 +467,15 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                         ),
                     ],
                   ),
-                const Text(
-                  'Переводы между своими счетами лучше снять: в приложении один общий баланс.',
+                Text(
+                  uiText(
+                    'Переводы между своими счетами лучше снять: в приложении один общий баланс.',
+                  ),
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Выбрать все'),
+                  title: Text(uiText('Выбрать все')),
                   value: allSelected,
                   onChanged: selectable.isEmpty
                       ? null
@@ -490,7 +504,9 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                         : (v) => setState(() => item.selected = v ?? false),
                   ),
                   title: Text(
-                    row.description.isEmpty ? 'Без описания' : row.description,
+                    row.description.isEmpty
+                        ? uiText('Без описания')
+                        : row.description,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -498,7 +514,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                     spacing: 8,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Text(DateFormat('d MMM y', 'ru').format(row.date)),
+                      Text(localDateFormat('d MMM y').format(row.date)),
                       ActionChip(
                         visualDensity: VisualDensity.compact,
                         avatar: CategoryAvatar(
@@ -507,16 +523,16 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                           color: item.category.colorName,
                           size: 20,
                         ),
-                        label: Text(item.category.name),
+                        label: Text(categoryTitle(item.category.name)),
                         onPressed: item.known || row.isBalanceAdjustment
                             ? null
                             : () => chooseCategory(item),
                       ),
                       if (item.known)
-                        const Text('уже импортирована')
+                        Text(uiText('уже импортирована'))
                       else if (item.duplicate)
                         Text(
-                          'возможный дубль',
+                          uiText('возможный дубль'),
                           style: TextStyle(color: theme.colorScheme.error),
                         ),
                     ],
@@ -535,7 +551,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
         children: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: selectedCount == 0
@@ -545,7 +561,7 @@ class _StatementPreviewDialogState extends State<StatementPreviewDialog> {
                       if (item.selected)
                         StatementImport.toTransaction(item.row, item.category),
                   ]),
-            child: Text('Импортировать ($selectedCount)'),
+            child: Text(uiText('Импортировать ({0})', [selectedCount])),
           ),
         ],
       ),
@@ -585,7 +601,7 @@ class QuarantinePanel extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  'Отложено записей с ошибками: ${entries.length}',
+                  uiText('Отложено записей с ошибками: {0}', [entries.length]),
                   style: theme.textTheme.titleMedium?.copyWith(
                     color: theme.colorScheme.onErrorContainer,
                   ),
@@ -595,15 +611,22 @@ class QuarantinePanel extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            'Эти записи не удалось прочитать, поэтому они не участвуют в балансе. '
-            'Остальные данные в порядке. Сохраните отчёт, чтобы восстановить их вручную.'
-            '${fromServer ? ' Записи с сервера снова загрузит «Полная синхронизация» после обновления приложения.' : ''}',
+            uiText(
+              'Эти записи не удалось прочитать, поэтому они не участвуют в балансе. Остальные данные в порядке. Сохраните отчёт, чтобы восстановить их вручную.{0}',
+              [
+                fromServer
+                    ? uiText(
+                        ' Записи с сервера снова загрузит «Полная синхронизация» после обновления приложения.',
+                      )
+                    : '',
+              ],
+            ),
             style: TextStyle(color: theme.colorScheme.onErrorContainer),
           ),
           const SizedBox(height: 8),
           for (final entry in entries.take(5))
             Text(
-              '• ${entry.source == 'server' ? 'Сервер' : 'Устройство'} · '
+              '• ${entry.source == 'server' ? uiText('Сервер') : uiText('Устройство')} · '
               '${entry.sectionTitle}${entry.recordId == null ? '' : ' ${entry.recordId}'}: ${entry.reason}',
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
@@ -611,7 +634,7 @@ class QuarantinePanel extends StatelessWidget {
             ),
           if (entries.length > 5)
             Text(
-              'и ещё ${entries.length - 5}',
+              uiText('и ещё {0}', [entries.length - 5]),
               style: TextStyle(color: theme.colorScheme.onErrorContainer),
             ),
           const SizedBox(height: 12),
@@ -622,9 +645,9 @@ class QuarantinePanel extends StatelessWidget {
               FilledButton.tonalIcon(
                 onPressed: onSave,
                 icon: const Icon(Icons.save_alt),
-                label: const Text('Сохранить отчёт'),
+                label: Text(uiText('Сохранить отчёт')),
               ),
-              TextButton(onPressed: onClear, child: const Text('Очистить')),
+              TextButton(onPressed: onClear, child: Text(uiText('Очистить'))),
             ],
           ),
         ],
@@ -654,10 +677,10 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
   };
 
   static String actionTitle(BackupAction action) => switch (action) {
-    BackupAction.add => 'Добавится',
-    BackupAction.update => 'Обновится',
-    BackupAction.delete => 'Удалится',
-    BackupAction.skip => 'Без изменений',
+    BackupAction.add => uiText('Добавится'),
+    BackupAction.update => uiText('Обновится'),
+    BackupAction.delete => uiText('Удалится'),
+    BackupAction.skip => uiText('Без изменений'),
   };
 
   int count(BackupAction action) =>
@@ -674,10 +697,10 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
     switch (record) {
       case TransactionRecord t:
         title = t.isBalanceAdjustment
-            ? 'Корректировка баланса'
-            : t.categoryName;
+            ? uiText('Корректировка баланса')
+            : categoryTitle(t.categoryName);
         details =
-            '${DateFormat('d MMM y', 'ru').format(t.date.toLocal())}'
+            '${localDateFormat('d MMM y').format(t.date.toLocal())}'
             '${t.note.isEmpty ? '' : ' · ${t.note}'}';
         leading = CategoryAvatar(
           icon: t.isBalanceAdjustment ? 'tune' : t.categoryIcon,
@@ -694,8 +717,10 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
           ),
         );
       case CategoryRecord c:
-        title = 'Категория «${c.name}»';
-        details = c.kind == TransactionKind.income ? 'Доход' : 'Расход';
+        title = uiText('Категория «{0}»', [c.name]);
+        details = c.kind == TransactionKind.income
+            ? uiText('Доход')
+            : uiText('Расход');
         leading = CategoryAvatar(
           icon: c.icon,
           emoji: c.emoji,
@@ -703,8 +728,8 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
           size: 36,
         );
       case BudgetRecord b:
-        title = 'Бюджет «${b.categoryName}»';
-        details = DateFormat('LLLL y', 'ru').format(b.monthStart.toLocal());
+        title = uiText('Бюджет «{0}»', [categoryTitle(b.categoryName)]);
+        details = localDateFormat('LLLL y').format(b.monthStart.toLocal());
         leading = CategoryAvatar(
           icon: b.categoryIcon,
           emoji: b.categoryEmoji,
@@ -718,7 +743,7 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
       default:
         title = item.id;
     }
-    final status = skip ? item.reason : actionTitle(item.action);
+    final status = skip ? uiText(item.reason) : actionTitle(item.action);
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 16),
       leading: Row(
@@ -774,7 +799,7 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         automaticallyImplyLeading: false,
-        title: const Text('Восстановление из копии'),
+        title: Text(uiText('Восстановление из копии')),
       ),
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -798,19 +823,20 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
                 ),
                 if (plan.invalid > 0)
                   Text(
-                    'Не удалось прочитать записей: ${plan.invalid}',
+                    uiText('Не удалось прочитать записей: {0}', [plan.invalid]),
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
                   ),
-                const Text(
-                  'Отмеченные записи попадут на устройство и в синхронизацию. '
-                  'Более новые изменения на устройстве не затираются.',
+                Text(
+                  uiText(
+                    'Отмеченные записи попадут на устройство и в синхронизацию. Более новые изменения на устройстве не затираются.',
+                  ),
                 ),
                 CheckboxListTile(
                   contentPadding: EdgeInsets.zero,
                   controlAffinity: ListTileControlAffinity.leading,
-                  title: const Text('Выбрать все'),
+                  title: Text(uiText('Выбрать все')),
                   value: allSelected,
                   onChanged: actionable.isEmpty
                       ? null
@@ -838,13 +864,13 @@ class _BackupPreviewDialogState extends State<BackupPreviewDialog> {
         children: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: selected.isEmpty
                 ? null
                 : () => Navigator.pop(context, Set<String>.of(selected)),
-            child: Text('Восстановить (${selected.length})'),
+            child: Text(uiText('Восстановить ({0})', [selected.length])),
           ),
         ],
       ),

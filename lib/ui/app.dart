@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../l10n/app_strings.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,10 +44,12 @@ class BalanceApp extends StatelessWidget {
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: store,
     builder: (context, _) => MaterialApp(
-      title: 'Баланс',
+      onGenerateTitle: (context) =>
+          uiTextFor(Localizations.localeOf(context).languageCode, 'Баланс'),
       debugShowCheckedModeBanner: false,
-      locale: const Locale('ru'),
-      supportedLocales: const [Locale('ru'), Locale('en')],
+      locale: store.appLanguage == 'system' ? null : Locale(store.appLanguage),
+      supportedLocales: appLocales,
+      localeResolutionCallback: resolveAppLocale,
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
       theme: BalanceThemes.build(
         Brightness.light,
@@ -61,8 +64,10 @@ class BalanceApp extends StatelessWidget {
           : store.theme == 'light'
           ? ThemeMode.light
           : ThemeMode.system,
-      builder: (context, child) =>
-          PrivacyGate(lock: lock, child: child ?? const SizedBox.shrink()),
+      builder: (context, child) {
+        appLocale = Localizations.localeOf(context).languageCode;
+        return PrivacyGate(lock: lock, child: child ?? const SizedBox.shrink());
+      },
       home: store.ready
           ? BalanceShell(store: store, lock: lock, notifications: notifications)
           : const Scaffold(body: Center(child: CircularProgressIndicator())),
@@ -170,9 +175,7 @@ class _BalanceShellState extends State<BalanceShell> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              e.toString().replaceFirst('Invalid argument(s): ', ''),
-            ),
+            content: Text(uiError(e)),
             duration: const Duration(seconds: 6),
           ),
         );
@@ -213,9 +216,9 @@ class _BalanceShellState extends State<BalanceShell> {
       await actions.initialize((type) {
         if (mounted) quickAdd(type);
       });
-      await actions.setShortcutItems(const [
-        ShortcutItem(type: 'expense', localizedTitle: 'Расход'),
-        ShortcutItem(type: 'income', localizedTitle: 'Доход'),
+      await actions.setShortcutItems([
+        ShortcutItem(type: 'expense', localizedTitle: uiText('Расход')),
+        ShortcutItem(type: 'income', localizedTitle: uiText('Доход')),
       ]);
     } catch (_) {
       // Shortcuts are optional; the plugin is absent in tests.
@@ -281,8 +284,8 @@ class _BalanceShellState extends State<BalanceShell> {
       // No chip tooltip: its long-press recognizer would swallow deletion.
       return Semantics(
         hint: isSaved
-            ? 'Шаблон. Удерживайте, чтобы удалить'
-            : 'Часто повторяется',
+            ? uiText('Шаблон. Удерживайте, чтобы удалить')
+            : uiText('Часто повторяется'),
         child: GestureDetector(
           onLongPress: isSaved ? () => removeTemplate(t) : null,
           onSecondaryTap: isSaved ? () => removeTemplate(t) : null,
@@ -293,7 +296,10 @@ class _BalanceShellState extends State<BalanceShell> {
               color: t.categoryColorName,
               size: 24,
             ),
-            label: Text('${t.title}$amount', overflow: TextOverflow.ellipsis),
+            label: Text(
+              '${t.note.isEmpty ? categoryTitle(t.categoryName) : t.note}$amount',
+              overflow: TextOverflow.ellipsis,
+            ),
             onPressed: () => editTransaction(null, t),
           ),
         ),
@@ -304,7 +310,7 @@ class _BalanceShellState extends State<BalanceShell> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const SizedBox(height: 28),
-        sectionTitle('Быстрый ввод'),
+        sectionTitle(uiText('Быстрый ввод')),
         Wrap(
           spacing: 8,
           runSpacing: 8,
@@ -320,8 +326,8 @@ class _BalanceShellState extends State<BalanceShell> {
   Future<void> removeTemplate(TransactionTemplate t) async {
     if (await confirmDelete(
       context,
-      'Удалить шаблон «${t.title}»?',
-      message: 'Операции не изменятся, удалится только шаблон.',
+      uiText('Удалить шаблон «{0}»?', [t.title]),
+      message: uiText('Операции не изменятся, удалится только шаблон.'),
     )) {
       await run(() => store.deleteTemplate(t.id));
     }
@@ -365,7 +371,7 @@ class _BalanceShellState extends State<BalanceShell> {
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
-        title: const Text('Скорректировать баланс'),
+        title: Text(uiText('Скорректировать баланс')),
         content: SizedBox(
           width: 400,
           child: Form(
@@ -373,8 +379,10 @@ class _BalanceShellState extends State<BalanceShell> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'Укажите фактический остаток. Разница сохранится отдельной операцией и не повлияет на аналитику.',
+                Text(
+                  uiText(
+                    'Укажите фактический остаток. Разница сохранится отдельной операцией и не повлияет на аналитику.',
+                  ),
                 ),
                 const SizedBox(height: 20),
                 TextFormField(
@@ -384,16 +392,18 @@ class _BalanceShellState extends State<BalanceShell> {
                     signed: true,
                   ),
                   decoration: InputDecoration(
-                    labelText: 'Фактический баланс, ${store.baseCurrency}',
+                    labelText: uiText('Фактический баланс, {0}', [
+                      store.baseCurrency,
+                    ]),
                   ),
                   validator: (s) => parseAmount(s ?? '', signed: true) == null
-                      ? 'Введите сумму'
+                      ? uiText('Введите сумму')
                       : null,
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
                   controller: note,
-                  decoration: const InputDecoration(labelText: 'Заметка'),
+                  decoration: InputDecoration(labelText: uiText('Заметка')),
                 ),
               ],
             ),
@@ -402,7 +412,7 @@ class _BalanceShellState extends State<BalanceShell> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: () {
@@ -410,7 +420,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 Navigator.pop(context, parseAmount(amount.text, signed: true));
               }
             },
-            child: const Text('Сохранить'),
+            child: Text(uiText('Сохранить')),
           ),
         ],
       ),
@@ -463,10 +473,13 @@ class _BalanceShellState extends State<BalanceShell> {
   }
 
   @override
-  Widget build(BuildContext context) => CallbackShortcuts(
-    bindings: shortcuts(),
-    child: Focus(autofocus: true, child: _scaffold(context)),
-  );
+  Widget build(BuildContext context) {
+    Localizations.localeOf(context);
+    return CallbackShortcuts(
+      bindings: shortcuts(),
+      child: Focus(autofocus: true, child: _scaffold(context)),
+    );
+  }
 
   Widget _scaffold(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 900;
@@ -488,7 +501,10 @@ class _BalanceShellState extends State<BalanceShell> {
               ),
             ),
             const SizedBox(width: 12),
-            const Text('Баланс', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(
+              uiText('Баланс'),
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
           ],
         ),
         actions: [
@@ -504,8 +520,8 @@ class _BalanceShellState extends State<BalanceShell> {
           else
             IconButton(
               tooltip: store.session == null
-                  ? 'Настроить синхронизацию'
-                  : 'Синхронизировать',
+                  ? uiText('Настроить синхронизацию')
+                  : uiText('Синхронизировать'),
               onPressed: store.session == null
                   ? () => setState(() => page = 4)
                   : () => run(store.sync),
@@ -533,7 +549,9 @@ class _BalanceShellState extends State<BalanceShell> {
                   leading: Padding(
                     padding: const EdgeInsets.only(bottom: 20, top: 16),
                     child: FloatingActionButton(
-                      tooltip: 'Добавить операцию (${shortcutModifier}N)',
+                      tooltip: uiText('Добавить операцию ({0}N)', [
+                        shortcutModifier,
+                      ]),
                       onPressed: editTransaction,
                       child: const Icon(Icons.add),
                     ),
@@ -542,7 +560,7 @@ class _BalanceShellState extends State<BalanceShell> {
                     for (final i in railPages)
                       NavigationRailDestination(
                         icon: Icon(icons[i]),
-                        label: Text(shortTitles[i]),
+                        label: Text(uiText(shortTitles[i])),
                       ),
                   ],
                 );
@@ -579,7 +597,7 @@ class _BalanceShellState extends State<BalanceShell> {
                           Padding(
                             padding: const EdgeInsets.only(right: 4),
                             child: IconButton(
-                              tooltip: 'Назад',
+                              tooltip: uiText('Назад'),
                               onPressed: () => setState(() => page = 9),
                               icon: const Icon(Icons.arrow_back),
                             ),
@@ -589,7 +607,7 @@ class _BalanceShellState extends State<BalanceShell> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                titles[page],
+                                uiText(titles[page]),
                                 style: Theme.of(context)
                                     .textTheme
                                     .headlineMedium
@@ -598,13 +616,14 @@ class _BalanceShellState extends State<BalanceShell> {
                               const SizedBox(height: 5),
                               Text(
                                 page == 0
-                                    ? DateFormat(
+                                    ? localDateFormat(
                                         'LLLL y',
-                                        'ru',
                                       ).format(DateTime.now())
                                     : page == 4 && store.activeLedger != null
-                                    ? 'Пространство «${store.activeLedger!.name}»'
-                                    : subtitles[page],
+                                    ? uiText('Пространство «{0}»', [
+                                        store.activeLedger!.name,
+                                      ])
+                                    : uiText(subtitles[page]),
                                 style: Theme.of(context).textTheme.bodyMedium
                                     ?.copyWith(
                                       color: Theme.of(
@@ -619,19 +638,19 @@ class _BalanceShellState extends State<BalanceShell> {
                           FilledButton.icon(
                             onPressed: editTransaction,
                             icon: const Icon(Icons.add),
-                            label: const Text('Новая операция'),
+                            label: Text(uiText('Новая операция')),
                           ),
                       ],
                     ),
                     const SizedBox(height: 28),
                     if (store.error != null) ...[
                       MaterialBanner(
-                        content: Text(store.error!),
+                        content: Text(uiSyncStatus(store.error!)),
                         leading: const Icon(Icons.cloud_off_outlined),
                         actions: [
                           TextButton(
                             onPressed: store.clearError,
-                            child: const Text('Закрыть'),
+                            child: Text(uiText('Закрыть')),
                           ),
                         ],
                       ),
@@ -671,7 +690,7 @@ class _BalanceShellState extends State<BalanceShell> {
                             child: Icon(icons[i]),
                           )
                         : Icon(icons[i]),
-                    label: shortTitles[i],
+                    label: uiText(shortTitles[i]),
                   ),
               ],
             ),
@@ -679,7 +698,7 @@ class _BalanceShellState extends State<BalanceShell> {
           ? FloatingActionButton.extended(
               onPressed: editTransaction,
               icon: const Icon(Icons.add),
-              label: const Text('Операция'),
+              label: Text(uiText('Операция')),
             )
           : null,
     );
@@ -690,39 +709,45 @@ class _BalanceShellState extends State<BalanceShell> {
     entries: [
       MoreEntry(
         5,
-        titles[5],
+        uiText(titles[5]),
         icons[5],
         store.accounts.isEmpty
-            ? 'Наличные, карты, вклады и переводы'
-            : 'Счетов: ${store.activeAccounts.length}',
+            ? uiText('Наличные, карты, вклады и переводы')
+            : uiText('Счетов: {0}', [store.activeAccounts.length]),
       ),
       MoreEntry(
         6,
-        titles[6],
+        uiText(titles[6]),
         icons[6],
         store.pendingReminders.isNotEmpty
-            ? 'Ожидают подтверждения: ${store.pendingReminders.length}'
+            ? uiText('Ожидают подтверждения: {0}', [
+                store.pendingReminders.length,
+              ])
             : store.recurring.isEmpty
-            ? 'Подписки, аренда, зарплата'
-            : 'Платежей: ${store.recurring.length}',
+            ? uiText('Подписки, аренда, зарплата')
+            : uiText('Платежей: {0}', [store.recurring.length]),
       ),
       MoreEntry(
         7,
-        titles[7],
+        uiText(titles[7]),
         icons[7],
         store.goals.isEmpty
-            ? 'Копите на важное'
-            : 'Целей: ${store.goals.where((g) => !g.isArchived).length}',
+            ? uiText('Копите на важное')
+            : uiText('Целей: {0}', [
+                store.goals.where((g) => !g.isArchived).length,
+              ]),
       ),
       MoreEntry(
         8,
-        titles[8],
+        uiText(titles[8]),
         icons[8],
         store.debts.isEmpty
-            ? 'Кто кому должен'
-            : 'Открытых: ${store.debts.where((d) => !d.isClosed).length}',
+            ? uiText('Кто кому должен')
+            : uiText('Открытых: {0}', [
+                store.debts.where((d) => !d.isClosed).length,
+              ]),
       ),
-      MoreEntry(4, titles[4], icons[4], subtitles[4]),
+      MoreEntry(4, uiText(titles[4]), icons[4], uiText(subtitles[4])),
     ],
   );
 
@@ -781,11 +806,11 @@ class _BalanceShellState extends State<BalanceShell> {
           children: [
             Row(
               children: [
-                const Expanded(child: Text('Общий баланс')),
+                Expanded(child: Text(uiText('Общий баланс'))),
                 TextButton.icon(
                   onPressed: adjust,
                   icon: const Icon(Icons.tune, size: 18),
-                  label: const Text('Изменить'),
+                  label: Text(uiText('Изменить')),
                 ),
               ],
             ),
@@ -803,8 +828,8 @@ class _BalanceShellState extends State<BalanceShell> {
             const SizedBox(height: 16),
             Text(
               store.session == null
-                  ? 'Данные хранятся на этом устройстве'
-                  : '${store.email} · ${store.syncMessage ?? 'Готово к синхронизации'}',
+                  ? uiText('Данные хранятся на этом устройстве')
+                  : '${store.email} · ${uiSyncStatus(store.syncMessage ?? 'Готово к синхронизации')}',
             ),
           ],
         ),
@@ -818,37 +843,39 @@ class _BalanceShellState extends State<BalanceShell> {
       ],
       metricRow([
         Metric(
-          label: 'Доходы за месяц',
+          label: uiText('Доходы за месяц'),
           value: money(summary.incomeMinor, store.baseCurrency),
           icon: Icons.south_west,
           color: Colors.teal,
         ),
         Metric(
-          label: 'Расходы за месяц',
+          label: uiText('Расходы за месяц'),
           value: money(summary.expensesMinor, store.baseCurrency),
           icon: Icons.north_east,
           color: Colors.deepOrange,
         ),
       ]),
       const SizedBox(height: 28),
-      sectionTitle('Расходы по категориям'),
+      sectionTitle(uiText('Расходы по категориям')),
       spending(start, end, limit: 5),
       const SizedBox(height: 28),
       sectionTitle(
-        'Последние операции',
+        uiText('Последние операции'),
         action: TextButton(
           onPressed: () => setState(() => page = 1),
-          child: const Text('Все операции'),
+          child: Text(uiText('Все операции')),
         ),
       ),
       if (store.transactions.isEmpty)
         EmptyView(
-          title: 'Начните с первой операции',
-          subtitle: 'Запишите доход или расход, чтобы увидеть свой баланс.',
+          title: uiText('Начните с первой операции'),
+          subtitle: uiText(
+            'Запишите доход или расход, чтобы увидеть свой баланс.',
+          ),
           action: FilledButton.icon(
             onPressed: editTransaction,
             icon: const Icon(Icons.add),
-            label: const Text('Добавить'),
+            label: Text(uiText('Добавить')),
           ),
         )
       else
@@ -868,10 +895,13 @@ class _BalanceShellState extends State<BalanceShell> {
       children: [
         ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 20),
-          title: Text('Счета', style: Theme.of(context).textTheme.titleMedium),
+          title: Text(
+            uiText('Счета'),
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
           trailing: TextButton(
             onPressed: () => setState(() => page = 5),
-            child: const Text('Все счета'),
+            child: Text(uiText('Все счета')),
           ),
         ),
         for (final a in store.activeAccounts.take(4))
@@ -903,7 +933,7 @@ class _BalanceShellState extends State<BalanceShell> {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
       leading: const CategoryAvatar(icon: 'swap', color: 'slate'),
-      title: const Text('Перевод'),
+      title: Text(uiText('Перевод')),
       subtitle: Text.rich(
         TextSpan(
           style: muted,
@@ -913,7 +943,7 @@ class _BalanceShellState extends State<BalanceShell> {
             TextSpan(
               text:
                   '${accountName(store, t.toAccountId)} · '
-                  '${DateFormat('d MMM, HH:mm', 'ru').format(t.date.toLocal())}'
+                  '${localDateFormat('d MMM, HH:mm').format(t.date.toLocal())}'
                   '${t.note.isEmpty ? '' : ' · ${t.note}'}',
             ),
           ],
@@ -941,17 +971,20 @@ class _BalanceShellState extends State<BalanceShell> {
             ),
           ),
           PopupMenuButton<String>(
-            tooltip: 'Действия с переводом',
+            tooltip: uiText('Действия с переводом'),
             onSelected: (v) async {
               if (v == 'edit') {
                 await editTransfer(context, store, run, existing: t);
-              } else if (await confirmDelete(context, 'Удалить перевод?')) {
+              } else if (await confirmDelete(
+                context,
+                uiText('Удалить перевод?'),
+              )) {
                 await run(() => store.deleteTransfer(t.id));
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'edit', child: Text('Изменить')),
-              PopupMenuItem(value: 'delete', child: Text('Удалить')),
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'edit', child: Text(uiText('Изменить'))),
+              PopupMenuItem(value: 'delete', child: Text(uiText('Удалить'))),
             ],
           ),
         ],
@@ -968,18 +1001,20 @@ class _BalanceShellState extends State<BalanceShell> {
       color: t.categoryColorName,
     ),
     title: Text(
-      t.isBalanceAdjustment ? 'Корректировка баланса' : t.categoryName,
+      t.isBalanceAdjustment
+          ? uiText('Корректировка баланса')
+          : categoryTitle(t.categoryName),
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
     ),
     subtitle: Text(
       [
-        DateFormat('d MMM, HH:mm', 'ru').format(t.date.toLocal()),
+        localDateFormat('d MMM, HH:mm').format(t.date.toLocal()),
         if (t.accountId != null) accountName(store, t.accountId),
         if (t.note.isNotEmpty) t.note,
         if (t.tags.isNotEmpty) t.tags.map((tag) => '#$tag').join(' '),
         if (store.attachmentsFor(t.id).isNotEmpty)
-          'вложений: ${store.attachmentsFor(t.id).length}',
+          uiText('вложений: {0}', [store.attachmentsFor(t.id).length]),
       ].join(' · '),
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
@@ -995,7 +1030,7 @@ class _BalanceShellState extends State<BalanceShell> {
           ),
         ),
         PopupMenuButton<String>(
-          tooltip: 'Действия с операцией',
+          tooltip: uiText('Действия с операцией'),
           onSelected: (v) async {
             if (v == 'receipt') {
               await Navigator.of(context).push<void>(
@@ -1017,28 +1052,31 @@ class _BalanceShellState extends State<BalanceShell> {
                 () => store.saveTemplate(
                   TransactionTemplate.fromTransaction(AppStore.newId(), t),
                 ),
-                success: 'Шаблон сохранён в «Быстрый ввод»',
+                success: uiText('Шаблон сохранён в «Быстрый ввод»'),
               );
-            } else if (await confirmDelete(context, 'Удалить операцию?')) {
+            } else if (await confirmDelete(
+              context,
+              uiText('Удалить операцию?'),
+            )) {
               await run(() => store.deleteTransaction(t.id));
             }
           },
           itemBuilder: (_) => [
             if (PdfReceipt.positionsFromNote(t.note).isNotEmpty)
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'receipt',
-                child: Text('Позиции чека'),
+                child: Text(uiText('Позиции чека')),
               ),
-            const PopupMenuItem(value: 'edit', child: Text('Изменить')),
+            PopupMenuItem(value: 'edit', child: Text(uiText('Изменить'))),
             // A balance adjustment is not spending to repeat or reuse.
-            if (!t.isBalanceAdjustment) ...const [
-              PopupMenuItem(value: 'repeat', child: Text('Повторить')),
+            if (!t.isBalanceAdjustment) ...[
+              PopupMenuItem(value: 'repeat', child: Text(uiText('Повторить'))),
               PopupMenuItem(
                 value: 'template',
-                child: Text('Сохранить как шаблон'),
+                child: Text(uiText('Сохранить как шаблон')),
               ),
             ],
-            const PopupMenuItem(value: 'delete', child: Text('Удалить')),
+            PopupMenuItem(value: 'delete', child: Text(uiText('Удалить'))),
           ],
         ),
       ],
@@ -1062,7 +1100,7 @@ class _BalanceShellState extends State<BalanceShell> {
 
   List<Widget> transactions() {
     final f = listFilter;
-    final items = f.apply(store.transactions);
+    final items = f.apply(store.transactions, categoryAlias: categoryTitle);
     final transfers = f.applyTransfers(
       store.transfers,
       accountNames: (t) =>
@@ -1077,9 +1115,9 @@ class _BalanceShellState extends State<BalanceShell> {
       TextField(
         controller: searchController,
         focusNode: searchFocus,
-        decoration: const InputDecoration(
+        decoration: InputDecoration(
           prefixIcon: Icon(Icons.search),
-          hintText: 'Поиск по категории, заметке или тегу',
+          hintText: uiText('Поиск по категории, заметке или тегу'),
         ),
         onChanged: (s) => setState(() => listFilter = f.copyWith(query: s)),
       ),
@@ -1090,9 +1128,9 @@ class _BalanceShellState extends State<BalanceShell> {
         crossAxisAlignment: WrapCrossAlignment.center,
         children: [
           for (final e in {
-            'all': 'Все',
-            'expense': 'Расходы',
-            'income': 'Доходы',
+            'all': uiText('Все'),
+            'expense': uiText('Расходы'),
+            'income': uiText('Доходы'),
           }.entries)
             ChoiceChip(
               label: Text(e.value),
@@ -1106,16 +1144,16 @@ class _BalanceShellState extends State<BalanceShell> {
             child: OutlinedButton.icon(
               onPressed: editListFilter,
               icon: const Icon(Icons.filter_list),
-              label: const Text('Фильтры'),
+              label: Text(uiText('Фильтры')),
             ),
           ),
           PopupMenuButton<TransactionSort>(
-            tooltip: 'Сортировка',
+            tooltip: uiText('Сортировка'),
             initialValue: f.sort,
             onSelected: (v) => setState(() => listFilter = f.copyWith(sort: v)),
             itemBuilder: (_) => [
               for (final sort in TransactionSort.values)
-                PopupMenuItem(value: sort, child: Text(sort.title)),
+                PopupMenuItem(value: sort, child: Text(uiText(sort.title))),
             ],
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
@@ -1124,7 +1162,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 children: [
                   const Icon(Icons.sort, size: 20),
                   const SizedBox(width: 6),
-                  Text(f.sort.title),
+                  Text(uiText(f.sort.title)),
                 ],
               ),
             ),
@@ -1157,7 +1195,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 label: Text(
                   f.categories.length == 1
                       ? f.categories.single
-                      : 'Категорий: ${f.categories.length}',
+                      : uiText('Категорий: {0}', [f.categories.length]),
                 ),
                 onPressed: editListFilter,
                 onDeleted: () =>
@@ -1169,7 +1207,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 label: Text(
                   f.tags.length == 1
                       ? '#${f.tags.single}'
-                      : 'Тегов: ${f.tags.length}',
+                      : uiText('Тегов: {0}', [f.tags.length]),
                 ),
                 onPressed: editListFilter,
                 onDeleted: () =>
@@ -1183,17 +1221,21 @@ class _BalanceShellState extends State<BalanceShell> {
         Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: Text(
-            'Найдено: ${items.length + transfers.length} · расходы '
-            '${money(totals.expensesMinor, store.baseCurrency)} · доходы '
-            '${money(totals.incomeMinor, store.baseCurrency)}',
+            uiText('Найдено: {0} · расходы {1} · доходы {2}', [
+              items.length + transfers.length,
+              money(totals.expensesMinor, store.baseCurrency),
+              money(totals.incomeMinor, store.baseCurrency),
+            ]),
           ),
         ),
       if (items.isEmpty && transfers.isEmpty)
         EmptyView(
-          title: empty ? 'Операций пока нет' : 'Ничего не найдено',
+          title: empty
+              ? uiText('Операций пока нет')
+              : uiText('Ничего не найдено'),
           subtitle: empty
-              ? 'Добавьте операцию, чтобы она появилась здесь.'
-              : 'Измените поиск или фильтры.',
+              ? uiText('Добавьте операцию, чтобы она появилась здесь.')
+              : uiText('Измените поиск или фильтры.'),
           action: filtered
               ? TextButton(
                   onPressed: () => setState(() {
@@ -1201,7 +1243,7 @@ class _BalanceShellState extends State<BalanceShell> {
                     searchController.clear();
                     listFilter = TransactionFilter(kind: f.kind, sort: f.sort);
                   }),
-                  child: const Text('Сбросить фильтры'),
+                  child: Text(uiText('Сбросить фильтры')),
                 )
               : null,
         )
@@ -1249,9 +1291,9 @@ class _BalanceShellState extends State<BalanceShell> {
     if (limit != null) groups = groups.take(limit).toList();
     final total = FinanceMath.summary(base, start, end).expensesMinor;
     if (groups.isEmpty) {
-      return const EmptyView(
-        title: 'Расходов за период нет',
-        subtitle: 'Здесь появится структура ваших расходов.',
+      return EmptyView(
+        title: uiText('Расходов за период нет'),
+        subtitle: uiText('Здесь появится структура ваших расходов.'),
         icon: Icons.donut_large,
       );
     }
@@ -1281,7 +1323,7 @@ class _BalanceShellState extends State<BalanceShell> {
                             children: [
                               Expanded(
                                 child: Text(
-                                  g.name,
+                                  categoryTitle(g.name),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
@@ -1302,7 +1344,11 @@ class _BalanceShellState extends State<BalanceShell> {
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            '${total == 0 ? 0 : (g.amountMinor / total * 100).round()}% расходов',
+                            uiText('{0}% расходов', [
+                              total == 0
+                                  ? 0
+                                  : (g.amountMinor / total * 100).round(),
+                            ]),
                             style: Theme.of(context).textTheme.labelSmall,
                           ),
                         ],
@@ -1329,7 +1375,7 @@ class _BalanceShellState extends State<BalanceShell> {
       endExclusive.month,
       endExclusive.day - 1,
     );
-    final format = DateFormat('d MMM y', 'ru');
+    final format = localDateFormat('d MMM y');
     return DateUtils.isSameDay(start, last)
         ? format.format(start)
         : '${format.format(start)} – ${format.format(last)}';
@@ -1381,10 +1427,10 @@ class _BalanceShellState extends State<BalanceShell> {
         runSpacing: 8,
         children: [
           for (final e in {
-            '1': 'Месяц',
-            '3': '3 месяца',
-            '12': '12 месяцев',
-            'year': 'Год',
+            '1': uiText('Месяц'),
+            '3': uiText('3 месяца'),
+            '12': uiText('12 месяцев'),
+            'year': uiText('Год'),
           }.entries)
             ChoiceChip(
               label: Text(e.value),
@@ -1393,7 +1439,7 @@ class _BalanceShellState extends State<BalanceShell> {
             ),
           ChoiceChip(
             avatar: const Icon(Icons.date_range, size: 18),
-            label: const Text('Период'),
+            label: Text(uiText('Период')),
             selected: analyticsMode == 'custom',
             onSelected: (_) => customPeriod == null
                 ? pickAnalyticsRange()
@@ -1407,13 +1453,13 @@ class _BalanceShellState extends State<BalanceShell> {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
-              tooltip: 'Предыдущий год',
+              tooltip: uiText('Предыдущий год'),
               onPressed: () => setState(() => reportYear--),
               icon: const Icon(Icons.chevron_left),
             ),
             Text('$reportYear', style: Theme.of(context).textTheme.titleMedium),
             IconButton(
-              tooltip: 'Следующий год',
+              tooltip: uiText('Следующий год'),
               onPressed: reportYear >= now.year
                   ? null
                   : () => setState(() => reportYear++),
@@ -1429,7 +1475,7 @@ class _BalanceShellState extends State<BalanceShell> {
           child: InputChip(
             avatar: const Icon(Icons.edit_calendar_outlined, size: 18),
             label: Text(rangeTitle(start, end)),
-            tooltip: 'Изменить период',
+            tooltip: uiText('Изменить период'),
             onPressed: pickAnalyticsRange,
           ),
         ),
@@ -1437,13 +1483,13 @@ class _BalanceShellState extends State<BalanceShell> {
       const SizedBox(height: 20),
       metricRow([
         Metric(
-          label: 'Доходы',
+          label: uiText('Доходы'),
           value: money(sum.incomeMinor, store.baseCurrency),
           icon: Icons.south_west,
           color: Colors.teal,
         ),
         Metric(
-          label: 'Расходы',
+          label: uiText('Расходы'),
           value: money(sum.expensesMinor, store.baseCurrency),
           icon: Icons.north_east,
           color: Colors.deepOrange,
@@ -1452,12 +1498,12 @@ class _BalanceShellState extends State<BalanceShell> {
       const SizedBox(height: 16),
       metricRow([
         Metric(
-          label: 'Сбережения',
+          label: uiText('Сбережения'),
           value: '${saving.toStringAsFixed(1)}%',
           icon: Icons.savings_outlined,
         ),
         Metric(
-          label: 'Средний расход в день',
+          label: uiText('Средний расход в день'),
           value: money((sum.expensesMinor / days).round(), store.baseCurrency),
           icon: Icons.calendar_today_outlined,
         ),
@@ -1465,34 +1511,34 @@ class _BalanceShellState extends State<BalanceShell> {
       const SizedBox(height: 16),
       metricRow([
         Metric(
-          label: 'Результат периода',
+          label: uiText('Результат периода'),
           value: money(sum.balanceMinor, store.baseCurrency),
           icon: Icons.account_balance_wallet_outlined,
         ),
         Metric(
-          label: 'Крупнейшая категория',
-          value: grouped.isEmpty ? '—' : grouped.first.name,
+          label: uiText('Крупнейшая категория'),
+          value: grouped.isEmpty ? '—' : categoryTitle(grouped.first.name),
           icon: Icons.category_outlined,
         ),
       ]),
       const SizedBox(height: 28),
-      sectionTitle('Сравнение с прошлым периодом'),
+      sectionTitle(uiText('Сравнение с прошлым периодом')),
       comparison(PeriodComparison.of(base, period, now)),
       if (analyticsMode == '1') ...[
         const SizedBox(height: 28),
-        sectionTitle('Прогноз до конца месяца'),
+        sectionTitle(uiText('Прогноз до конца месяца')),
         forecast(now),
       ],
       if (analyticsMode == 'year') ...[
         const SizedBox(height: 28),
-        sectionTitle('Итоги года'),
+        sectionTitle(uiText('Итоги года')),
         yearReport(YearReport.of(base, reportYear, now)),
       ],
       const SizedBox(height: 28),
-      sectionTitle('Динамика доходов и расходов'),
+      sectionTitle(uiText('Динамика доходов и расходов')),
       trend(start, end),
       const SizedBox(height: 28),
-      sectionTitle('Структура расходов'),
+      sectionTitle(uiText('Структура расходов')),
       if (grouped.isNotEmpty) ...[
         Panel(
           child: SpendingRing(
@@ -1516,13 +1562,13 @@ class _BalanceShellState extends State<BalanceShell> {
         onCategory: (name) => setState(() => trendCategory = name),
       ),
       const SizedBox(height: 28),
-      sectionTitle('Динамика категории'),
+      sectionTitle(uiText('Динамика категории')),
       categoryTrend(period, grouped),
     ];
   }
 
   Widget comparison(PeriodComparison c) {
-    final format = DateFormat('d MMM', 'ru');
+    final format = localDateFormat('d MMM');
     String range(DateTime s, DateTime e) {
       final last = DateTime(e.year, e.month, e.day - 1);
       return DateUtils.isSameDay(s, last)
@@ -1555,9 +1601,13 @@ class _BalanceShellState extends State<BalanceShell> {
           line(c.expensesChange, c.expensesText, Colors.deepOrange),
           line(c.incomeChange, c.incomeText, Colors.teal),
           Text(
-            '${c.partial ? 'Пока период идёт, сравниваются одинаковые сроки: ' : ''}'
-            '${range(c.currentStart, c.currentEnd)} и '
-            '${range(c.previousStart, c.previousEnd)}',
+            uiText('{0}{1} и {2}', [
+              c.partial
+                  ? uiText('Пока период идёт, сравниваются одинаковые сроки: ')
+                  : '',
+              range(c.currentStart, c.currentEnd),
+              range(c.previousStart, c.previousEnd),
+            ]),
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -1574,13 +1624,13 @@ class _BalanceShellState extends State<BalanceShell> {
       children: [
         metricRow([
           Metric(
-            label: 'Ожидаемые расходы за месяц',
+            label: uiText('Ожидаемые расходы за месяц'),
             value: money(f.projectedMinor, store.baseCurrency),
             icon: Icons.query_stats,
             color: Colors.deepOrange,
           ),
           Metric(
-            label: 'Темп трат в день',
+            label: uiText('Темп трат в день'),
             value: money(f.dailyPaceMinor, store.baseCurrency),
             icon: Icons.speed,
           ),
@@ -1599,13 +1649,20 @@ class _BalanceShellState extends State<BalanceShell> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
-                    '${budget.exceeded
-                        ? 'Бюджеты месяца уже исчерпаны'
-                        : day != null
-                        ? 'При текущем темпе бюджет закончится $day-го'
-                        : 'При текущем темпе бюджета хватит до конца месяца'}. '
-                    'Потрачено ${money(budget.usedMinor, store.baseCurrency)} '
-                    'из ${money(budget.limitMinor, store.baseCurrency)}.',
+                    uiText('{0}. Потрачено {1} из {2}.', [
+                      budget.exceeded
+                          ? uiText('Бюджеты месяца уже исчерпаны')
+                          : day != null
+                          ? uiText(
+                              'При текущем темпе бюджет закончится {0}-го',
+                              [day],
+                            )
+                          : uiText(
+                              'При текущем темпе бюджета хватит до конца месяца',
+                            ),
+                      money(budget.usedMinor, store.baseCurrency),
+                      money(budget.limitMinor, store.baseCurrency),
+                    ]),
                   ),
                 ),
               ],
@@ -1619,18 +1676,18 @@ class _BalanceShellState extends State<BalanceShell> {
   Widget yearReport(YearReport r) {
     String month(MonthlyTotal? m) => m == null
         ? '—'
-        : toBeginningOfSentenceCase(DateFormat('LLLL', 'ru').format(m.month));
+        : toBeginningOfSentenceCase(localDateFormat('LLLL').format(m.month));
     return Column(
       children: [
         metricRow([
           Metric(
-            label: 'Расходы в среднем за месяц',
+            label: uiText('Расходы в среднем за месяц'),
             value: money(r.averageMonthlyExpensesMinor, store.baseCurrency),
             icon: Icons.north_east,
             color: Colors.deepOrange,
           ),
           Metric(
-            label: 'Доходы в среднем за месяц',
+            label: uiText('Доходы в среднем за месяц'),
             value: money(r.averageMonthlyIncomeMinor, store.baseCurrency),
             icon: Icons.south_west,
             color: Colors.teal,
@@ -1639,12 +1696,12 @@ class _BalanceShellState extends State<BalanceShell> {
         const SizedBox(height: 16),
         metricRow([
           Metric(
-            label: 'Самый затратный месяц',
+            label: uiText('Самый затратный месяц'),
             value: month(r.topExpenseMonth),
             icon: Icons.local_fire_department_outlined,
           ),
           Metric(
-            label: 'Самый доходный месяц',
+            label: uiText('Самый доходный месяц'),
             value: month(r.topIncomeMonth),
             icon: Icons.emoji_events_outlined,
           ),
@@ -1673,9 +1730,11 @@ class _BalanceShellState extends State<BalanceShell> {
         if (!inPeriod.any((p) => p.name == g.name)) g.name,
     ];
     if (names.isEmpty) {
-      return const EmptyView(
-        title: 'Расходов пока нет',
-        subtitle: 'Здесь появится динамика трат по выбранной категории.',
+      return EmptyView(
+        title: uiText('Расходов пока нет'),
+        subtitle: uiText(
+          'Здесь появится динамика трат по выбранной категории.',
+        ),
         icon: Icons.show_chart,
       );
     }
@@ -1700,7 +1759,7 @@ class _BalanceShellState extends State<BalanceShell> {
             key: ValueKey('trend-$name'),
             initialValue: name,
             isExpanded: true,
-            decoration: const InputDecoration(labelText: 'Категория'),
+            decoration: InputDecoration(labelText: uiText('Категория')),
             items: [
               for (final n in names)
                 DropdownMenuItem(
@@ -1712,9 +1771,13 @@ class _BalanceShellState extends State<BalanceShell> {
           ),
           const SizedBox(height: 16),
           Text(
-            'За 12 месяцев: ${money(total, store.baseCurrency)} · в среднем '
-            '${money(active == 0 ? 0 : (total / active).round(), store.baseCurrency)} '
-            'в месяц с тратами',
+            uiText('За 12 месяцев: {0} · в среднем {1} в месяц с тратами', [
+              money(total, store.baseCurrency),
+              money(
+                active == 0 ? 0 : (total / active).round(),
+                store.baseCurrency,
+              ),
+            ]),
           ),
           const SizedBox(height: 20),
           SizedBox(
@@ -1726,10 +1789,10 @@ class _BalanceShellState extends State<BalanceShell> {
                   Expanded(
                     child: Tooltip(
                       message:
-                          '${toBeginningOfSentenceCase(DateFormat('LLLL y', 'ru').format(series[i].month))}\n${money(series[i].amountMinor, store.baseCurrency)}',
+                          '${toBeginningOfSentenceCase(localDateFormat('LLLL y').format(series[i].month))}\n${money(series[i].amountMinor, store.baseCurrency)}',
                       child: Semantics(
                         label:
-                            '${DateFormat('LLLL y', 'ru').format(series[i].month)}, ${money(series[i].amountMinor, store.baseCurrency)}',
+                            '${localDateFormat('LLLL y').format(series[i].month)}, ${money(series[i].amountMinor, store.baseCurrency)}',
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -1756,9 +1819,8 @@ class _BalanceShellState extends State<BalanceShell> {
                               height: 24,
                               child: i.isEven
                                   ? Text(
-                                      DateFormat(
+                                      localDateFormat(
                                         'MMM',
-                                        'ru',
                                       ).format(series[i].month),
                                       style: const TextStyle(fontSize: 10),
                                       maxLines: 1,
@@ -1782,21 +1844,21 @@ class _BalanceShellState extends State<BalanceShell> {
     final buckets = TrendBucket.of(start, end);
     final last = DateTime(end.year, end.month, end.day - 1);
     final dayFormat = start.month == last.month && start.year == last.year
-        ? DateFormat('d')
-        : DateFormat('d.MM');
+        ? localDateFormat('d')
+        : localDateFormat('d.MM');
     final monthFormat = start.year == last.year
-        ? DateFormat('MMM', 'ru')
+        ? localDateFormat('MMM')
         : DateFormat('MM.yy');
     String label(TrendBucket b) => switch (b.size) {
       BucketSize.day => dayFormat.format(b.start),
-      BucketSize.week => DateFormat('d.MM').format(b.start),
+      BucketSize.week => localDateFormat('d.MM').format(b.start),
       BucketSize.month => monthFormat.format(b.start),
     };
     String title(TrendBucket b) => switch (b.size) {
-      BucketSize.day => DateFormat('d MMM y', 'ru').format(b.start),
+      BucketSize.day => localDateFormat('d MMM y').format(b.start),
       BucketSize.week => rangeTitle(b.start, b.endExclusive),
       BucketSize.month => toBeginningOfSentenceCase(
-        DateFormat('LLLL y', 'ru').format(b.start),
+        localDateFormat('LLLL y').format(b.start),
       ),
     };
     final summaries = buckets
@@ -1811,11 +1873,14 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Wrap(
+          Wrap(
             spacing: 20,
             children: [
-              Text('● Доходы', style: TextStyle(color: Colors.teal)),
-              Text('● Расходы', style: TextStyle(color: Colors.deepOrange)),
+              Text(uiText('● Доходы'), style: TextStyle(color: Colors.teal)),
+              Text(
+                uiText('● Расходы'),
+                style: TextStyle(color: Colors.deepOrange),
+              ),
             ],
           ),
           const SizedBox(height: 24),
@@ -1827,11 +1892,17 @@ class _BalanceShellState extends State<BalanceShell> {
                 for (int i = 0; i < buckets.length; i++)
                   Expanded(
                     child: Tooltip(
-                      message:
-                          '${title(buckets[i])}\nДоходы: ${money(summaries[i].incomeMinor, store.baseCurrency)}\nРасходы: ${money(summaries[i].expensesMinor, store.baseCurrency)}',
+                      message: uiText('{0}\nДоходы: {1}\nРасходы: {2}', [
+                        title(buckets[i]),
+                        money(summaries[i].incomeMinor, store.baseCurrency),
+                        money(summaries[i].expensesMinor, store.baseCurrency),
+                      ]),
                       child: Semantics(
-                        label:
-                            '${title(buckets[i])}, доходы ${money(summaries[i].incomeMinor, store.baseCurrency)}, расходы ${money(summaries[i].expensesMinor, store.baseCurrency)}',
+                        label: uiText('{0}, доходы {1}, расходы {2}', [
+                          title(buckets[i]),
+                          money(summaries[i].incomeMinor, store.baseCurrency),
+                          money(summaries[i].expensesMinor, store.baseCurrency),
+                        ]),
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
@@ -1917,7 +1988,7 @@ class _BalanceShellState extends State<BalanceShell> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                tooltip: 'Предыдущий месяц',
+                tooltip: uiText('Предыдущий месяц'),
                 onPressed: () => setState(
                   () => budgetMonth = DateTime(
                     budgetMonth.year,
@@ -1926,9 +1997,9 @@ class _BalanceShellState extends State<BalanceShell> {
                 ),
                 icon: const Icon(Icons.chevron_left),
               ),
-              Text(DateFormat('LLLL y', 'ru').format(budgetMonth)),
+              Text(localDateFormat('LLLL y').format(budgetMonth)),
               IconButton(
-                tooltip: 'Следующий месяц',
+                tooltip: uiText('Следующий месяц'),
                 onPressed: () => setState(
                   () => budgetMonth = DateTime(
                     budgetMonth.year,
@@ -1942,15 +2013,15 @@ class _BalanceShellState extends State<BalanceShell> {
           FilledButton.icon(
             onPressed: editBudget,
             icon: const Icon(Icons.add),
-            label: const Text('Добавить лимит'),
+            label: Text(uiText('Добавить лимит')),
           ),
         ],
       ),
       const SizedBox(height: 24),
       if (entries.isEmpty)
-        const EmptyView(
-          title: 'Бюджет ещё не запланирован',
-          subtitle: 'Задайте месячные лимиты для категорий расходов.',
+        EmptyView(
+          title: uiText('Бюджет ещё не запланирован'),
+          subtitle: uiText('Задайте месячные лимиты для категорий расходов.'),
           icon: Icons.savings_outlined,
         ),
       for (final b in entries)
@@ -1980,19 +2051,19 @@ class _BalanceShellState extends State<BalanceShell> {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  b.categoryName,
+                  categoryTitle(b.categoryName),
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
               ),
               IconButton(
-                tooltip: 'Изменить лимит',
+                tooltip: uiText('Изменить лимит'),
                 onPressed: () => editBudget(b),
                 icon: const Icon(Icons.edit_outlined),
               ),
               IconButton(
-                tooltip: 'Удалить лимит',
+                tooltip: uiText('Удалить лимит'),
                 onPressed: () async {
-                  if (await confirmDelete(context, 'Удалить лимит?')) {
+                  if (await confirmDelete(context, uiText('Удалить лимит?'))) {
                     await run(() => store.deleteBudget(b.id));
                   }
                 },
@@ -2011,7 +2082,7 @@ class _BalanceShellState extends State<BalanceShell> {
                   color: color,
                 ),
               ),
-              Text('из ${money(b.limitMinor, store.baseCurrency)}'),
+              Text(uiText('из {0}', [money(b.limitMinor, store.baseCurrency)])),
             ],
           ),
           const SizedBox(height: 12),
@@ -2024,10 +2095,14 @@ class _BalanceShellState extends State<BalanceShell> {
           const SizedBox(height: 12),
           Text(
             b.limitMinor <= 0
-                ? 'Некорректный лимит. Измените бюджет.'
+                ? uiText('Некорректный лимит. Измените бюджет.')
                 : used > b.limitMinor
-                ? 'Превышение: ${money(used - b.limitMinor, store.baseCurrency)}'
-                : 'Осталось: ${money(b.limitMinor - used, store.baseCurrency)}',
+                ? uiText('Превышение: {0}', [
+                    money(used - b.limitMinor, store.baseCurrency),
+                  ])
+                : uiText('Осталось: {0}', [
+                    money(b.limitMinor - used, store.baseCurrency),
+                  ]),
             style: TextStyle(color: color),
           ),
           if (runsOut != null) ...[
@@ -2041,7 +2116,11 @@ class _BalanceShellState extends State<BalanceShell> {
                 ),
                 const SizedBox(width: 6),
                 Expanded(
-                  child: Text('При текущем темпе лимит закончится $runsOut-го'),
+                  child: Text(
+                    uiText('При текущем темпе лимит закончится {0}-го', [
+                      runsOut,
+                    ]),
+                  ),
                 ),
               ],
             ),
@@ -2056,15 +2135,35 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          sectionTitle('Оформление'),
+          sectionTitle(uiText('Оформление')),
+          DropdownButtonFormField<String>(
+            key: ValueKey('app-language-${store.appLanguage}'),
+            initialValue: store.appLanguage,
+            decoration: InputDecoration(labelText: uiText('Язык приложения')),
+            items: [
+              DropdownMenuItem(
+                value: 'system',
+                child: Text(uiText('Как в системе')),
+              ),
+              const DropdownMenuItem(value: 'ru', child: Text('Русский')),
+              const DropdownMenuItem(value: 'en', child: Text('English')),
+            ],
+            onChanged: (value) {
+              if (value != null) run(() => store.setAppLanguage(value));
+            },
+          ),
+          const SizedBox(height: 16),
           DropdownButtonFormField<String>(
             key: ValueKey('theme-mode-${store.theme}'),
             initialValue: store.theme,
-            decoration: const InputDecoration(labelText: 'Тема'),
-            items: const [
-              DropdownMenuItem(value: 'system', child: Text('Системная')),
-              DropdownMenuItem(value: 'light', child: Text('Светлая')),
-              DropdownMenuItem(value: 'dark', child: Text('Тёмная')),
+            decoration: InputDecoration(labelText: uiText('Тема')),
+            items: [
+              DropdownMenuItem(
+                value: 'system',
+                child: Text(uiText('Системная')),
+              ),
+              DropdownMenuItem(value: 'light', child: Text(uiText('Светлая'))),
+              DropdownMenuItem(value: 'dark', child: Text(uiText('Тёмная'))),
             ],
             onChanged: (v) {
               if (v != null) run(() => store.setTheme(v));
@@ -2072,7 +2171,7 @@ class _BalanceShellState extends State<BalanceShell> {
           ),
           const SizedBox(height: 20),
           Text(
-            'Цветовой пресет',
+            uiText('Цветовой пресет'),
             style: Theme.of(context).textTheme.titleSmall,
           ),
           const SizedBox(height: 10),
@@ -2082,7 +2181,7 @@ class _BalanceShellState extends State<BalanceShell> {
             children: ColorPreset.values
                 .map(
                   (preset) => ChoiceChip(
-                    label: Text(preset.label),
+                    label: Text(uiText(preset.label)),
                     avatar: CircleAvatar(
                       radius: 9,
                       backgroundColor: preset == ColorPreset.oled
@@ -2105,8 +2204,10 @@ class _BalanceShellState extends State<BalanceShell> {
           ),
           if (store.themePreset == 'oled') ...[
             const SizedBox(height: 12),
-            const Text(
-              'OLED: чистый чёрный фон #000000 в тёмном режиме. При выборе пресета тёмная тема включается автоматически. Можно затем выбрать системный режим.',
+            Text(
+              uiText(
+                'OLED: чистый чёрный фон #000000 в тёмном режиме. При выборе пресета тёмная тема включается автоматически. Можно затем выбрать системный режим.',
+              ),
             ),
           ],
         ],
@@ -2117,7 +2218,7 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          sectionTitle('Валюты и курсы'),
+          sectionTitle(uiText('Валюты и курсы')),
           CurrencySettingsPanel(store: store, run: run),
         ],
       ),
@@ -2127,27 +2228,33 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          sectionTitle('Сервер и синхронизация'),
+          sectionTitle(uiText('Сервер и синхронизация')),
           Text(
-            store.serverUrl.isEmpty ? 'Сервер не подключён' : store.serverUrl,
+            store.serverUrl.isEmpty
+                ? uiText('Сервер не подключён')
+                : store.serverUrl,
           ),
           const SizedBox(height: 12),
           Text(
             store.session == null
-                ? 'Можно работать локально или подключить свой BalanceServer.'
+                ? uiText(
+                    'Можно работать локально или подключить свой BalanceServer.',
+                  )
                 : store.email,
           ),
           if (store.lastSyncAt != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
               child: Text(
-                'Последняя синхронизация: ${DateFormat('d.MM.y HH:mm').format(store.lastSyncAt!)}',
+                uiText('Последняя синхронизация: {0}', [
+                  localDateFormat('d.MM.y HH:mm').format(store.lastSyncAt!),
+                ]),
               ),
             ),
           if (store.syncMessage != null)
             Padding(
               padding: const EdgeInsets.only(top: 8),
-              child: Text(store.syncMessage!),
+              child: Text(uiSyncStatus(store.syncMessage!)),
             ),
           const SizedBox(height: 16),
           Wrap(
@@ -2157,45 +2264,47 @@ class _BalanceShellState extends State<BalanceShell> {
               OutlinedButton.icon(
                 onPressed: serverDialog,
                 icon: const Icon(Icons.dns_outlined),
-                label: const Text('Адрес сервера'),
+                label: Text(uiText('Адрес сервера')),
               ),
               if (store.session == null) ...[
                 FilledButton(
                   onPressed: store.serverUrl.isEmpty
                       ? null
                       : () => authDialog(false),
-                  child: const Text('Войти'),
+                  child: Text(uiText('Войти')),
                 ),
                 TextButton(
                   onPressed: store.serverUrl.isEmpty
                       ? null
                       : () => authDialog(true),
-                  child: const Text('Регистрация'),
+                  child: Text(uiText('Регистрация')),
                 ),
               ] else ...[
                 FilledButton.icon(
                   onPressed: store.syncing ? null : () => run(store.sync),
                   icon: const Icon(Icons.sync),
-                  label: const Text('Синхронизировать'),
+                  label: Text(uiText('Синхронизировать')),
                 ),
                 OutlinedButton(
                   onPressed: store.syncing
                       ? null
                       : () => run(store.resetAndSync),
-                  child: const Text('Полная синхронизация'),
+                  child: Text(uiText('Полная синхронизация')),
                 ),
                 TextButton(
                   onPressed: store.syncing ? null : () => run(store.signOut),
-                  child: const Text('Выйти'),
+                  child: Text(uiText('Выйти')),
                 ),
               ],
             ],
           ),
           if (kIsWeb)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 12),
               child: Text(
-                'Web: используйте HTTPS и разрешите адрес приложения в CORS-настройках сервера.',
+                uiText(
+                  'Web: используйте HTTPS и разрешите адрес приложения в CORS-настройках сервера.',
+                ),
               ),
             ),
         ],
@@ -2207,7 +2316,7 @@ class _BalanceShellState extends State<BalanceShell> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            sectionTitle('Общие пространства'),
+            sectionTitle(uiText('Общие пространства')),
             LedgersPanel(store: store, run: run),
           ],
         ),
@@ -2219,15 +2328,15 @@ class _BalanceShellState extends State<BalanceShell> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           sectionTitle(
-            'Категории',
+            uiText('Категории'),
             action: FilledButton.tonalIcon(
               onPressed: editCategory,
               icon: const Icon(Icons.add),
-              label: const Text('Добавить'),
+              label: Text(uiText('Добавить')),
             ),
           ),
           if (store.categories.isEmpty)
-            const Text('Создайте свои категории или используйте встроенные.'),
+            Text(uiText('Создайте свои категории или используйте встроенные.')),
           for (final c in store.categories)
             ListTile(
               contentPadding: EdgeInsets.zero,
@@ -2236,17 +2345,20 @@ class _BalanceShellState extends State<BalanceShell> {
                 emoji: c.emoji,
                 color: c.colorName,
               ),
-              title: Text(c.name),
-              subtitle: Text(c.kindRawValue == 'income' ? 'Доход' : 'Расход'),
+              title: Text(categoryTitle(c.name)),
+              subtitle: Text(
+                c.kindRawValue == 'income' ? uiText('Доход') : uiText('Расход'),
+              ),
               onTap: () => editCategory(c),
               trailing: IconButton(
-                tooltip: 'Удалить категорию',
+                tooltip: uiText('Удалить категорию'),
                 onPressed: () async {
                   if (await confirmDelete(
                     context,
-                    'Удалить «${c.name}»?',
-                    message:
-                        'Операции сохранят категорию. Связанные бюджеты будут удалены.',
+                    uiText('Удалить «{0}»?', [c.name]),
+                    message: uiText(
+                      'Операции сохранят категорию. Связанные бюджеты будут удалены.',
+                    ),
                   )) {
                     await run(() => store.deleteCategory(c.id));
                   }
@@ -2256,7 +2368,7 @@ class _BalanceShellState extends State<BalanceShell> {
             ),
           ExpansionTile(
             tilePadding: EdgeInsets.zero,
-            title: const Text('Встроенные категории'),
+            title: Text(uiText('Встроенные категории')),
             children: [
               for (final c in [
                 ...BuiltInCategories.expense,
@@ -2269,9 +2381,11 @@ class _BalanceShellState extends State<BalanceShell> {
                     color: c.colorName,
                     size: 32,
                   ),
-                  title: Text(c.name),
+                  title: Text(categoryTitle(c.name)),
                   subtitle: Text(
-                    c.kindRawValue == 'income' ? 'Доход' : 'Расход',
+                    c.kindRawValue == 'income'
+                        ? uiText('Доход')
+                        : uiText('Расход'),
                   ),
                 ),
             ],
@@ -2288,14 +2402,17 @@ class _BalanceShellState extends State<BalanceShell> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            sectionTitle('Горячие клавиши'),
+            sectionTitle(uiText('Горячие клавиши')),
             for (final (keys, action) in [
-              ('${shortcutModifier}N', 'Новая операция'),
-              ('${shortcutModifier}F', 'Поиск операций'),
-              ('${shortcutModifier}1 … ${shortcutModifier}5', 'Разделы'),
+              ('${shortcutModifier}N', uiText('Новая операция')),
+              ('${shortcutModifier}F', uiText('Поиск операций')),
+              (
+                '${shortcutModifier}1 … ${shortcutModifier}5',
+                uiText('Разделы'),
+              ),
               if (widget.lock?.enabled ?? false)
-                ('${shortcutModifier}L', 'Заблокировать'),
-              ('Esc', 'Закрыть окно или отменить'),
+                ('${shortcutModifier}L', uiText('Заблокировать')),
+              ('Esc', uiText('Закрыть окно или отменить')),
             ])
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 4),
@@ -2322,7 +2439,7 @@ class _BalanceShellState extends State<BalanceShell> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            sectionTitle('Уведомления'),
+            sectionTitle(uiText('Уведомления')),
             NotificationsPanel(
               notifications: widget.notifications!,
               store: store,
@@ -2338,7 +2455,7 @@ class _BalanceShellState extends State<BalanceShell> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            sectionTitle('Приватность'),
+            sectionTitle(uiText('Приватность')),
             PrivacyPanel(lock: widget.lock!, run: run),
           ],
         ),
@@ -2349,7 +2466,7 @@ class _BalanceShellState extends State<BalanceShell> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          sectionTitle('Данные'),
+          sectionTitle(uiText('Данные')),
           if (store.quarantine.isNotEmpty) ...[
             QuarantinePanel(
               entries: store.quarantine,
@@ -2358,10 +2475,10 @@ class _BalanceShellState extends State<BalanceShell> {
             ),
             const SizedBox(height: 16),
           ],
-          const Text(
-            'Резервная копия хранит все записи открытого пространства без потерь: '
-            'операции, категории, бюджеты, счета, переводы, цели, долги и курсы. '
-            'Восстановление добавляет записи из копии и не затирает более новые изменения.',
+          Text(
+            uiText(
+              'Резервная копия хранит все записи открытого пространства без потерь: операции, категории, бюджеты, счета, переводы, цели, долги и курсы. Восстановление добавляет записи из копии и не затирает более новые изменения.',
+            ),
           ),
           const SizedBox(height: 16),
           Wrap(
@@ -2371,39 +2488,41 @@ class _BalanceShellState extends State<BalanceShell> {
               FilledButton.tonalIcon(
                 onPressed: backup,
                 icon: const Icon(Icons.backup_outlined),
-                label: const Text('Резервная копия'),
+                label: Text(uiText('Резервная копия')),
               ),
               OutlinedButton.icon(
                 onPressed: restore,
                 icon: const Icon(Icons.settings_backup_restore),
-                label: const Text('Восстановить из копии'),
+                label: Text(uiText('Восстановить из копии')),
               ),
               OutlinedButton.icon(
                 onPressed: importStatement,
                 icon: const Icon(Icons.account_balance_outlined),
-                label: const Text('Импорт выписки банка'),
+                label: Text(uiText('Импорт выписки банка')),
               ),
               OutlinedButton.icon(
                 onPressed: export,
                 icon: const Icon(Icons.download_outlined),
-                label: const Text('Экспорт истории CSV'),
+                label: Text(uiText('Экспорт истории CSV')),
               ),
               TextButton(
                 onPressed: () => showAboutDialog(
                   context: context,
-                  applicationName: 'Баланс',
+                  applicationName: uiText('Баланс'),
                   applicationVersion: '4.3.0',
                   applicationIcon: const Icon(
                     Icons.account_balance_wallet_outlined,
                     size: 40,
                   ),
-                  children: const [
+                  children: [
                     Text(
-                      'Личный бюджет · Flutter · Material 3\nСинхронизация с BalanceServer',
+                      uiText(
+                        'Личный бюджет · Flutter · Material 3\nСинхронизация с BalanceServer',
+                      ),
                     ),
                   ],
                 ),
-                child: const Text('О приложении'),
+                child: Text(uiText('О приложении')),
               ),
             ],
           ),
@@ -2418,7 +2537,7 @@ class _BalanceShellState extends State<BalanceShell> {
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
-        title: const Text('Адрес сервера'),
+        title: Text(uiText('Адрес сервера')),
         content: SizedBox(
           width: 460,
           child: Form(
@@ -2426,8 +2545,10 @@ class _BalanceShellState extends State<BalanceShell> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text(
-                  'При смене сервера потребуется новый вход. Данные аккаунтов хранятся раздельно.',
+                Text(
+                  uiText(
+                    'При смене сервера потребуется новый вход. Данные аккаунтов хранятся раздельно.',
+                  ),
                 ),
                 const SizedBox(height: 20),
                 TextFormField(
@@ -2441,7 +2562,7 @@ class _BalanceShellState extends State<BalanceShell> {
                     if (uri == null ||
                         !uri.hasAuthority ||
                         !['https', 'http'].contains(uri.scheme)) {
-                      return 'Введите полный адрес сервера';
+                      return uiText('Введите полный адрес сервера');
                     }
                     return null;
                   },
@@ -2453,7 +2574,7 @@ class _BalanceShellState extends State<BalanceShell> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: () {
@@ -2461,7 +2582,7 @@ class _BalanceShellState extends State<BalanceShell> {
                 Navigator.pop(context, controller.text);
               }
             },
-            child: const Text('Сохранить'),
+            child: Text(uiText('Сохранить')),
           ),
         ],
       ),
@@ -2469,7 +2590,7 @@ class _BalanceShellState extends State<BalanceShell> {
     if (result != null) {
       await run(
         () => store.setServerUrl(result),
-        success: 'Адрес сервера сохранён',
+        success: uiText('Адрес сервера сохранён'),
       );
     }
     await Future<void>.delayed(const Duration(milliseconds: 300));
@@ -2484,7 +2605,9 @@ class _BalanceShellState extends State<BalanceShell> {
       context: context,
       builder: (context) => AlertDialog(
         scrollable: true,
-        title: Text(register ? 'Создать аккаунт' : 'Войти в аккаунт'),
+        title: Text(
+          register ? uiText('Создать аккаунт') : uiText('Войти в аккаунт'),
+        ),
         content: SizedBox(
           width: 420,
           child: Form(
@@ -2496,11 +2619,11 @@ class _BalanceShellState extends State<BalanceShell> {
                   controller: email,
                   keyboardType: TextInputType.emailAddress,
                   autofillHints: const [AutofillHints.email],
-                  decoration: const InputDecoration(
-                    labelText: 'Электронная почта',
+                  decoration: InputDecoration(
+                    labelText: uiText('Электронная почта'),
                   ),
                   validator: (s) =>
-                      (s ?? '').contains('@') ? null : 'Введите email',
+                      (s ?? '').contains('@') ? null : uiText('Введите email'),
                 ),
                 const SizedBox(height: 16),
                 TextFormField(
@@ -2511,16 +2634,18 @@ class _BalanceShellState extends State<BalanceShell> {
                         ? AutofillHints.newPassword
                         : AutofillHints.password,
                   ],
-                  decoration: const InputDecoration(labelText: 'Пароль'),
+                  decoration: InputDecoration(labelText: uiText('Пароль')),
                   validator: (s) => (s ?? '').isEmpty
-                      ? 'Введите пароль'
+                      ? uiText('Введите пароль')
                       : register && s!.length < 8
-                      ? 'Не менее 8 символов'
+                      ? uiText('Не менее 8 символов')
                       : null,
                 ),
                 const SizedBox(height: 12),
-                const Text(
-                  'При первом подключении нового аккаунта локальные записи переносятся в него. Аккаунты хранятся раздельно.',
+                Text(
+                  uiText(
+                    'При первом подключении нового аккаунта локальные записи переносятся в него. Аккаунты хранятся раздельно.',
+                  ),
                 ),
               ],
             ),
@@ -2529,13 +2654,15 @@ class _BalanceShellState extends State<BalanceShell> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: () {
               if (form.currentState!.validate()) Navigator.pop(context, true);
             },
-            child: Text(register ? 'Зарегистрироваться' : 'Войти'),
+            child: Text(
+              register ? uiText('Зарегистрироваться') : uiText('Войти'),
+            ),
           ),
         ],
       ),
@@ -2582,21 +2709,23 @@ class _BalanceShellState extends State<BalanceShell> {
   });
 
   Future<void> restore() async {
-    final file = await pickFile('Резервная копия', ['json']);
+    final file = await pickFile(uiText('Резервная копия'), ['json']);
     if (file == null || !mounted) return;
     await run(() async {
       final Object? decoded;
       try {
         decoded = jsonDecode(utf8.decode(await file.readAsBytes()));
       } on FormatException {
-        throw const FormatException('Файл повреждён или это не JSON');
+        throw FormatException(uiText('Файл повреждён или это не JSON'));
       }
       final plan = await store.previewBackup(decoded);
       if (plan.items.isEmpty) {
         throw FormatException(
           plan.invalid > 0
-              ? 'В копии нет читаемых записей'
-              : 'Восстанавливать нечего: копия пуста или содержит только удаления',
+              ? uiText('В копии нет читаемых записей')
+              : uiText(
+                  'Восстанавливать нечего: копия пуста или содержит только удаления',
+                ),
         );
       }
       if (!mounted) return;
@@ -2618,7 +2747,7 @@ class _BalanceShellState extends State<BalanceShell> {
 
   Future<void> importStatement() async {
     final file = await pickFile(
-      'Выписка',
+      uiText('Выписка'),
       ['csv', 'txt', 'ofx', 'qfx'],
       androidMimeTypes: const [
         'application/x-ofx',
@@ -2633,7 +2762,9 @@ class _BalanceShellState extends State<BalanceShell> {
       final added = await store.importTransactions(records);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Импортировано операций: $added')),
+          SnackBar(
+            content: Text(uiText('Импортировано операций: {0}', [added])),
+          ),
         );
       }
     });
@@ -2657,10 +2788,11 @@ class _BalanceShellState extends State<BalanceShell> {
   Future<void> clearQuarantine() async {
     if (await confirmDelete(
       context,
-      'Очистить отложенные записи?',
-      message:
-          'Копии повреждённых записей будут удалены с устройства. Сначала сохраните отчёт, если они нужны.',
-      action: 'Очистить',
+      uiText('Очистить отложенные записи?'),
+      message: uiText(
+        'Копии повреждённых записей будут удалены с устройства. Сначала сохраните отчёт, если они нужны.',
+      ),
+      action: uiText('Очистить'),
     )) {
       await run(store.clearQuarantine);
     }

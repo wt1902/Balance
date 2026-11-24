@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import '../l10n/app_strings.dart';
 
 import '../domain/finance.dart';
 import '../domain/records.dart';
 import '../domain/transaction_filter.dart';
 import 'design.dart';
 
-String _day(DateTime d) => DateFormat('d MMM y', 'ru').format(d);
+String _day(DateTime d) => localDateFormat('d MMM y').format(d);
 
 /// Human-readable filter chips shown above the list.
 String periodTitle(TransactionFilter f) {
@@ -14,14 +14,14 @@ String periodTitle(TransactionFilter f) {
   final now = DateTime.now();
   for (final preset in PeriodPreset.values) {
     final (s, e) = preset.range(now);
-    if (from == s && to == e) return preset.title;
+    if (from == s && to == e) return uiText(preset.title);
   }
   if (from != null && to != null) {
     return '${_day(from)} – ${_day(to.subtract(const Duration(days: 1)))}';
   }
   return from != null
-      ? 'С ${_day(from)}'
-      : 'По ${_day(to!.subtract(const Duration(days: 1)))}';
+      ? uiText('С {0}', [_day(from)])
+      : uiText('По {0}', [_day(to!.subtract(const Duration(days: 1)))]);
 }
 
 String amountTitle(TransactionFilter f, String currency) {
@@ -30,8 +30,8 @@ String amountTitle(TransactionFilter f, String currency) {
     return '${money(min, currency)} – ${money(max, currency)}';
   }
   return min != null
-      ? 'от ${money(min, currency)}'
-      : 'до ${money(max!, currency)}';
+      ? uiText('от {0}', [money(min, currency)])
+      : uiText('до {0}', [money(max!, currency)]);
 }
 
 /// Period, amount and categories; returns the edited filter or null.
@@ -104,11 +104,13 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
     final to = max.text.trim().isEmpty ? null : parseAmount(max.text);
     if ((min.text.trim().isNotEmpty && from == null) ||
         (max.text.trim().isNotEmpty && to == null)) {
-      setState(() => amountError = 'Введите сумму, например 1500 или 99,90');
+      setState(
+        () => amountError = uiText('Введите сумму, например 1500 или 99,90'),
+      );
       return;
     }
     if (from != null && to != null && from > to) {
-      setState(() => amountError = '«От» больше, чем «до»');
+      setState(() => amountError = uiText('«От» больше, чем «до»'));
       return;
     }
     Navigator.pop(
@@ -138,23 +140,23 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Фильтры', style: theme.textTheme.titleLarge),
+              Text(uiText('Фильтры'), style: theme.textTheme.titleLarge),
               const SizedBox(height: 16),
-              Text('Период', style: theme.textTheme.titleSmall),
+              Text(uiText('Период'), style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
                 children: [
                   ChoiceChip(
-                    label: const Text('Всё время'),
+                    label: Text(uiText('Всё время')),
                     selected: !draft.hasPeriod,
                     onSelected: (_) =>
                         setState(() => draft = draft.withoutPeriod()),
                   ),
                   for (final preset in PeriodPreset.values)
                     ChoiceChip(
-                      label: Text(preset.title),
+                      label: Text(uiText(preset.title)),
                       selected: isPreset(preset),
                       onSelected: (_) {
                         final (s, e) = preset.range(DateTime.now());
@@ -171,14 +173,14 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                     label: Text(
                       draft.hasPeriod && !PeriodPreset.values.any(isPreset)
                           ? periodTitle(draft)
-                          : 'Выбрать даты',
+                          : uiText('Выбрать даты'),
                     ),
                     onPressed: pickRange,
                   ),
                 ],
               ),
               const SizedBox(height: 20),
-              Text('Сумма', style: theme.textTheme.titleSmall),
+              Text(uiText('Сумма'), style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               Row(
                 children: [
@@ -188,7 +190,7 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(labelText: 'От'),
+                      decoration: InputDecoration(labelText: uiText('От')),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -198,7 +200,7 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
-                      decoration: const InputDecoration(labelText: 'До'),
+                      decoration: InputDecoration(labelText: uiText('До')),
                     ),
                   ),
                 ],
@@ -212,7 +214,7 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                   ),
                 ),
               const SizedBox(height: 20),
-              Text('Категории', style: theme.textTheme.titleSmall),
+              Text(uiText('Категории'), style: theme.textTheme.titleSmall),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -226,7 +228,7 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                         color: c.colorName,
                         size: 20,
                       ),
-                      label: Text(c.name),
+                      label: Text(categoryTitle(c.name)),
                       selected: draft.categories.contains(c.name),
                       onSelected: (on) => setState(
                         () => draft = draft.copyWith(
@@ -240,7 +242,7 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
               ),
               if (widget.tags.isNotEmpty || draft.tags.isNotEmpty) ...[
                 const SizedBox(height: 20),
-                Text('Теги', style: theme.textTheme.titleSmall),
+                Text(uiText('Теги'), style: theme.textTheme.titleSmall),
                 const SizedBox(height: 8),
                 Wrap(
                   spacing: 8,
@@ -276,11 +278,11 @@ class _TransactionFilterSheetState extends State<TransactionFilterSheet> {
                         sort: draft.sort,
                       ),
                     ),
-                    child: const Text('Сбросить'),
+                    child: Text(uiText('Сбросить')),
                   ),
                   FilledButton(
                     onPressed: apply,
-                    child: const Text('Применить'),
+                    child: Text(uiText('Применить')),
                   ),
                 ],
               ),
@@ -337,7 +339,7 @@ class DayPanel extends StatelessWidget {
               children: [
                 Expanded(
                   child: Text(
-                    DateFormat('d MMMM y, EEE', 'ru').format(group.day),
+                    localDateFormat('d MMMM y, EEE').format(group.day),
                     style: style,
                   ),
                 ),

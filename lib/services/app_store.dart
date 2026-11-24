@@ -86,6 +86,8 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   String currency = 'RUB';
   String theme = 'system';
   String themePreset = 'forest';
+  String _appLanguage = 'system';
+  String get appLanguage => _appLanguage;
   AuthSession? session;
   String? sessionPersistenceWarning;
   String get email => session?.email ?? '';
@@ -380,6 +382,10 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
     currency = _preferences!.getString('currency') ?? currency;
     theme = _preferences!.getString('theme') ?? theme;
     themePreset = ColorPreset.fromId(_preferences!.getString('themePreset')).id;
+    final savedLanguage = _preferences!.getString('appLanguage');
+    _appLanguage = savedLanguage == 'ru' || savedLanguage == 'en'
+        ? savedLanguage!
+        : 'system';
     _deviceId = _preferences!.getString('deviceId') ?? newId();
     await _preferences!.setString('deviceId', _deviceId);
     _loadTemplates();
@@ -1704,6 +1710,17 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> setCurrency(String value) => _exclusive(() async {
     currency = value;
     await _preferences!.setString('currency', value);
+    _notify();
+  });
+  Future<void> setAppLanguage(String value) => _exclusive(() async {
+    if (!const ['system', 'ru', 'en'].contains(value)) {
+      throw ArgumentError.value(value, 'value', 'Unsupported app language');
+    }
+    if (value == _appLanguage) return;
+    if (!await _preferences!.setString('appLanguage', value)) {
+      throw StateError('Could not save the app language');
+    }
+    _appLanguage = value;
     _notify();
   });
   Future<void> setTheme(String value) => _exclusive(() async {

@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 
-export '../domain/money_format.dart';
+import '../domain/money_format.dart' as formatting;
+
+String money(int minor, String currency) =>
+    formatting.money(minor, currency, locale: appLocale);
 
 int? parseAmount(String value, {bool signed = false}) {
   final clean = value
@@ -242,7 +246,10 @@ class SpendingRing extends StatelessWidget {
   final String total;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: 'Всего расходов: $total. Структура по категориям приведена ниже.',
+    label: uiText(
+      'Всего расходов: {0}. Структура по категориям приведена ниже.',
+      [total],
+    ),
     child: SizedBox(
       height: 200,
       child: Center(
@@ -257,7 +264,7 @@ class SpendingRing extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      'Расходы',
+                      uiText('Расходы'),
                       style: Theme.of(context).textTheme.labelMedium,
                     ),
                     const SizedBox(height: 6),

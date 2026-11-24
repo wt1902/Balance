@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'l10n/app_strings.dart';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/foundation.dart'
     show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart' show rootBundle;
@@ -46,32 +48,43 @@ Future<void> main() async {
   } catch (error) {
     runApp(
       MaterialApp(
-        home: Scaffold(
-          body: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.storage_outlined, size: 48),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Не удалось открыть хранилище',
-                      style: TextStyle(fontSize: 24),
+        locale: store.appLanguage == 'system'
+            ? null
+            : Locale(store.appLanguage),
+        supportedLocales: appLocales,
+        localeResolutionCallback: resolveAppLocale,
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
+        home: Builder(
+          builder: (context) {
+            final locale = Localizations.localeOf(context).languageCode;
+            return Scaffold(
+              body: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.storage_outlined, size: 48),
+                        const SizedBox(height: 16),
+                        Text(
+                          uiTextFor(locale, 'Не удалось открыть хранилище'),
+                          style: TextStyle(fontSize: 24),
+                        ),
+                        const SizedBox(height: 12),
+                        SelectableText('$error'),
+                        const SizedBox(height: 20),
+                        FilledButton(
+                          onPressed: main,
+                          child: Text(uiTextFor(locale, 'Повторить')),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 12),
-                    SelectableText('$error'),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: main,
-                      child: const Text('Повторить'),
-                    ),
-                  ],
+                  ),
                 ),
               ),
-            ),
-          ),
+            );
+          },
         ),
       ),
     );

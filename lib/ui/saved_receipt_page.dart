@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 
 import '../domain/pdf_receipt.dart';
 import 'design.dart';
@@ -13,7 +14,7 @@ class SavedReceiptPage extends StatelessWidget {
     final total = PdfReceipt(positions: positions).positionsTotal;
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('Позиции чека')),
+      appBar: AppBar(title: Text(uiText('Позиции чека'))),
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
@@ -26,7 +27,7 @@ class SavedReceiptPage extends StatelessWidget {
                   padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
                   children: [
                     Text(
-                      'Сумма позиций: ${money(total, 'RUB')}',
+                      uiText('Сумма позиций: {0}', [money(total, 'RUB')]),
                       style: text.titleMedium,
                     ),
                     const SizedBox(height: 16),
@@ -48,11 +49,11 @@ class SavedReceiptPage extends StatelessWidget {
                         children: [
                           TableRow(
                             children: [
-                              _cell('Товар', style: text.labelLarge),
+                              _cell(uiText('Товар'), style: text.labelLarge),
                               for (final label in [
-                                'Количество',
-                                'Цена за ед.',
-                                'Сумма',
+                                uiText('Количество'),
+                                uiText('Цена за ед.'),
+                                uiText('Сумма'),
                               ])
                                 _cell(
                                   label,
@@ -65,7 +66,10 @@ class SavedReceiptPage extends StatelessWidget {
                             TableRow(
                               children: [
                                 _cell(item.name),
-                                _cell(item.quantity, numeric: true),
+                                _cell(
+                                  localDecimal(item.quantity),
+                                  numeric: true,
+                                ),
                                 _cell(money(item.price, 'RUB'), numeric: true),
                                 _cell(money(item.total, 'RUB'), numeric: true),
                               ],
@@ -76,9 +80,17 @@ class SavedReceiptPage extends StatelessWidget {
                       for (final item in positions) ...[
                         Text(item.name, style: text.titleMedium),
                         const SizedBox(height: 4),
-                        Text('Количество: ${item.quantity}'),
-                        Text('Цена за ед.: ${money(item.price, 'RUB')}'),
-                        Text('Сумма: ${money(item.total, 'RUB')}'),
+                        Text(
+                          uiText('Количество: {0}', [
+                            localDecimal(item.quantity),
+                          ]),
+                        ),
+                        Text(
+                          uiText('Цена за ед.: {0}', [
+                            money(item.price, 'RUB'),
+                          ]),
+                        ),
+                        Text(uiText('Сумма: {0}', [money(item.total, 'RUB')])),
                         const Divider(height: 24),
                       ],
                   ],

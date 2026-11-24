@@ -292,3 +292,10 @@ The transaction menu opens saved receipt items on a dedicated screen, using
 a table on wide screens and a list on phones. It also reads notes saved by
 earlier versions of the PDF importer.
 
+## App language
+
+Flutter users can follow the system language or select Russian or English.
+English is the fallback for unsupported system languages. The choice is
+stored locally. Built-in category labels are translated for display and
+search, with canonical category names used for stored and synced records.
+

@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
+import '../l10n/app_strings.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/finance.dart';
 import '../domain/pdf_receipt.dart';
@@ -96,7 +96,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
     });
     try {
       final file = await pickFile(
-        'Электронный чек PDF',
+        uiText('Электронный чек PDF'),
         const ['pdf'],
         androidMimeTypes: const ['application/pdf'],
       );
@@ -122,9 +122,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
       final detail = confirmed.note;
       final combined = previous.isEmpty ? detail : '$previous\n\n$detail';
       if (combined.characters.length > 4000) {
-        throw const FormatException(
-          'Позиции и заметка превышают 4000 символов. '
-          'Сократите заметку или уточните список позиций.',
+        throw FormatException(
+          uiText(
+            'Позиции и заметка превышают 4000 символов. Сократите заметку или уточните список позиций.',
+          ),
         );
       }
       setState(() {
@@ -136,9 +137,11 @@ class _TransactionEditorState extends State<TransactionEditor> {
         _scannedReceipt = true;
       });
     } on FormatException catch (error) {
-      if (mounted) setState(() => _pdfError = error.message);
+      if (mounted) setState(() => _pdfError = uiText(error.message));
     } catch (_) {
-      if (mounted) setState(() => _pdfError = 'Не удалось прочитать PDF-чек.');
+      if (mounted) {
+        setState(() => _pdfError = uiText('Не удалось прочитать PDF-чек.'));
+      }
     } finally {
       if (mounted) setState(() => _readingPdf = false);
     }
@@ -208,27 +211,27 @@ class _TransactionEditorState extends State<TransactionEditor> {
         children: [
           Text(
             _scannedReceipt
-                ? 'Предпросмотр операции'
+                ? uiText('Предпросмотр операции')
                 : widget.existing == null
-                ? 'Новая операция'
-                : 'Изменить операцию',
+                ? uiText('Новая операция')
+                : uiText('Изменить операцию'),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           if (_scannedReceipt) ...[
             const SizedBox(height: 8),
-            const Text('Проверьте данные чека и выберите категорию и счёт.'),
+            Text(uiText('Проверьте данные чека и выберите категорию и счёт.')),
           ],
           const SizedBox(height: 24),
           SegmentedButton<String>(
-            segments: const [
+            segments: [
               ButtonSegment(
                 value: 'expense',
-                label: Text('Расход'),
+                label: Text(uiText('Расход')),
                 icon: Icon(Icons.north_east),
               ),
               ButtonSegment(
                 value: 'income',
-                label: Text('Доход'),
+                label: Text(uiText('Доход')),
                 icon: Icon(Icons.south_west),
               ),
             ],
@@ -246,7 +249,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
               onPressed: _readingPdf ? null : _scanReceipt,
               icon: const Icon(Icons.qr_code_scanner),
               label: Text(
-                _scannedReceipt ? 'Сканировать снова' : 'Сканировать чек',
+                _scannedReceipt
+                    ? uiText('Сканировать снова')
+                    : uiText('Сканировать чек'),
               ),
             ),
           ],
@@ -256,7 +261,9 @@ class _TransactionEditorState extends State<TransactionEditor> {
               onPressed: _readingPdf ? null : _importPdfReceipt,
               icon: const Icon(Icons.picture_as_pdf_outlined),
               label: Text(
-                _readingPdf ? 'Читаем чек…' : 'Импортировать PDF-чек',
+                _readingPdf
+                    ? uiText('Читаем чек…')
+                    : uiText('Импортировать PDF-чек'),
               ),
             ),
             if (_pdfError case final error?)
@@ -270,14 +277,16 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: amount,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Сумма',
+            decoration: InputDecoration(
+              labelText: uiText('Сумма'),
               border: OutlineInputBorder(),
             ),
             validator: (v) {
               final m = parseAmount(v ?? '');
               return m == null || m <= 0
-                  ? 'Введите положительную сумму, до 2 знаков после запятой'
+                  ? uiText(
+                      'Введите положительную сумму, до 2 знаков после запятой',
+                    )
                   : null;
             },
           ),
@@ -285,8 +294,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
           DropdownButtonFormField<String>(
             initialValue: selected.name,
             isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Категория',
+            decoration: InputDecoration(
+              labelText: uiText('Категория'),
               border: OutlineInputBorder(),
             ),
             items: choices
@@ -303,7 +312,10 @@ class _TransactionEditorState extends State<TransactionEditor> {
                         ),
                         const SizedBox(width: 12),
                         Flexible(
-                          child: Text(c.name, overflow: TextOverflow.ellipsis),
+                          child: Text(
+                            categoryTitle(c.name),
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
                       ],
                     ),
@@ -335,7 +347,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
           ListTile(
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.calendar_today_outlined),
-            title: Text(DateFormat('d MMMM y, HH:mm', 'ru').format(date)),
+            title: Text(localDateFormat('d MMMM y, HH:mm').format(date)),
             trailing: const Icon(Icons.edit_outlined),
             onTap: () async {
               final d = await showDatePicker(
@@ -367,8 +379,8 @@ class _TransactionEditorState extends State<TransactionEditor> {
             controller: note,
             maxLines: 3,
             maxLength: 4000,
-            decoration: const InputDecoration(
-              labelText: 'Заметка',
+            decoration: InputDecoration(
+              labelText: uiText('Заметка'),
               border: OutlineInputBorder(),
             ),
           ),
@@ -392,7 +404,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
             children: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Отмена'),
+                child: Text(uiText('Отмена')),
               ),
               const SizedBox(width: 8),
               FilledButton(
@@ -436,7 +448,7 @@ class _TransactionEditorState extends State<TransactionEditor> {
                         ),
                   );
                 },
-                child: const Text('Сохранить'),
+                child: Text(uiText('Сохранить')),
               ),
             ],
           ),
@@ -486,20 +498,22 @@ class _CategoryEditorState extends State<CategoryEditor> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(
-            widget.existing == null ? 'Новая категория' : 'Изменить категорию',
+            widget.existing == null
+                ? uiText('Новая категория')
+                : uiText('Изменить категорию'),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 20),
           TextFormField(
             controller: name,
             maxLength: 80,
-            decoration: const InputDecoration(
-              labelText: 'Название',
+            decoration: InputDecoration(
+              labelText: uiText('Название'),
               border: OutlineInputBorder(),
             ),
             validator: (s) {
               final n = (s ?? '').trim().toLowerCase();
-              if (n.isEmpty) return 'Введите название';
+              if (n.isEmpty) return uiText('Введите название');
               if ([
                 ...BuiltInCategories.expense,
                 ...BuiltInCategories.income,
@@ -507,16 +521,16 @@ class _CategoryEditorState extends State<CategoryEditor> {
               ].any(
                 (c) => c.id != widget.existing?.id && c.name.toLowerCase() == n,
               )) {
-                return 'Категория с таким названием уже есть';
+                return uiText('Категория с таким названием уже есть');
               }
               return null;
             },
           ),
           const SizedBox(height: 16),
           SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'expense', label: Text('Расход')),
-              ButtonSegment(value: 'income', label: Text('Доход')),
+            segments: [
+              ButtonSegment(value: 'expense', label: Text(uiText('Расход'))),
+              ButtonSegment(value: 'income', label: Text(uiText('Доход'))),
             ],
             selected: {kind},
             onSelectionChanged: widget.existing != null
@@ -537,10 +551,10 @@ class _CategoryEditorState extends State<CategoryEditor> {
                 child: TextFormField(
                   controller: emoji,
                   decoration: InputDecoration(
-                    labelText: 'Свой эмодзи',
+                    labelText: uiText('Свой эмодзи'),
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
-                      tooltip: 'Убрать эмодзи',
+                      tooltip: uiText('Убрать эмодзи'),
                       icon: const Icon(Icons.close),
                       onPressed: () => setState(() => emoji.clear()),
                     ),
@@ -566,7 +580,7 @@ class _CategoryEditorState extends State<CategoryEditor> {
                 .toList(),
           ),
           const SizedBox(height: 16),
-          Text('Значок', style: Theme.of(context).textTheme.titleSmall),
+          Text(uiText('Значок'), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           Wrap(
             spacing: 4,
@@ -586,7 +600,7 @@ class _CategoryEditorState extends State<CategoryEditor> {
                 .toList(),
           ),
           const SizedBox(height: 20),
-          Text('Цвет', style: Theme.of(context).textTheme.titleSmall),
+          Text(uiText('Цвет'), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           Wrap(
             spacing: 6,
@@ -615,7 +629,7 @@ class _CategoryEditorState extends State<CategoryEditor> {
             children: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Отмена'),
+                child: Text(uiText('Отмена')),
               ),
               const SizedBox(width: 8),
               FilledButton(
@@ -636,7 +650,7 @@ class _CategoryEditorState extends State<CategoryEditor> {
                     ),
                   );
                 },
-                child: const Text('Сохранить'),
+                child: Text(uiText('Сохранить')),
               ),
             ],
           ),
@@ -695,20 +709,25 @@ class _BudgetEditorState extends State<BudgetEditor> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Лимит на ${DateFormat('LLLL y', 'ru').format(widget.month)}',
+            uiText('Лимит на {0}', [
+              localDateFormat('LLLL y').format(widget.month),
+            ]),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 24),
           DropdownButtonFormField<String>(
             initialValue: selected.name,
             isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Категория',
+            decoration: InputDecoration(
+              labelText: uiText('Категория'),
               border: OutlineInputBorder(),
             ),
             items: widget.categories
                 .map(
-                  (c) => DropdownMenuItem(value: c.name, child: Text(c.name)),
+                  (c) => DropdownMenuItem(
+                    value: c.name,
+                    child: Text(categoryTitle(c.name)),
+                  ),
                 )
                 .toList(),
             onChanged: (n) => setState(
@@ -720,13 +739,13 @@ class _BudgetEditorState extends State<BudgetEditor> {
             controller: amount,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: 'Месячный лимит',
+            decoration: InputDecoration(
+              labelText: uiText('Месячный лимит'),
               border: OutlineInputBorder(),
             ),
             validator: (v) =>
                 parseAmount(v ?? '') == null || parseAmount(v ?? '')! <= 0
-                ? 'Введите положительный лимит'
+                ? uiText('Введите положительный лимит')
                 : null,
           ),
           const SizedBox(height: 24),
@@ -737,7 +756,7 @@ class _BudgetEditorState extends State<BudgetEditor> {
             children: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Отмена'),
+                child: Text(uiText('Отмена')),
               ),
               FilledButton(
                 onPressed: () {
@@ -755,7 +774,7 @@ class _BudgetEditorState extends State<BudgetEditor> {
                     ),
                   );
                 },
-                child: const Text('Сохранить'),
+                child: Text(uiText('Сохранить')),
               ),
             ],
           ),
@@ -776,15 +795,15 @@ Future<bool> confirmDelete(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(title),
-        content: Text(message),
+        content: Text(uiText(message)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: Text(action),
+            child: Text(uiText(action)),
           ),
         ],
       ),

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import '../l10n/app_strings.dart';
 
 import '../domain/finance.dart';
 import '../domain/records.dart';
@@ -59,7 +59,7 @@ const recordColors = [
 ];
 
 String dayTitle(DateTime date) =>
-    DateFormat('d MMMM y', 'ru').format(date.toLocal());
+    localDateFormat('d MMMM y').format(date.toLocal());
 
 /// `+1 234,00 ₽` / `−1 234,00 ₽`.
 String signedMoney(int minor, String currency) =>
@@ -74,7 +74,7 @@ InlineSpan arrowSpan(BuildContext context, {Color? color}) => WidgetSpan(
       Icons.arrow_forward,
       size: 14,
       color: color ?? Theme.of(context).colorScheme.onSurfaceVariant,
-      semanticLabel: 'на',
+      semanticLabel: uiText('на'),
     ),
   ),
 );
@@ -82,11 +82,12 @@ InlineSpan arrowSpan(BuildContext context, {Color? color}) => WidgetSpan(
 /// The «по умолчанию» choice of a currency picker next to an account.
 String defaultCurrencyLabel(AppStore store, String? accountId) =>
     accountId == null
-    ? 'Базовая (${store.baseCurrency})'
-    : 'Как у счёта (${store.accountCurrency(accountId)})';
+    ? uiText('Базовая ({0})', [store.baseCurrency])
+    : uiText('Как у счёта ({0})', [store.accountCurrency(accountId)]);
 
-String accountName(AppStore store, String? id) =>
-    id == null ? 'Без счёта' : store.account(id)?.name ?? 'Удалённый счёт';
+String accountName(AppStore store, String? id) => id == null
+    ? uiText('Без счёта')
+    : store.account(id)?.name ?? uiText('Удалённый счёт');
 
 class SectionHeader extends StatelessWidget {
   const SectionHeader(this.title, {super.key, this.action});
@@ -143,11 +144,11 @@ class MissingRatesNotice extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Нет курса ${sorted.join(', ')}',
+                    uiText('Нет курса {0}', [sorted.join(', ')]),
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 4),
-                  const Text('Такие суммы не входят в общие итоги.'),
+                  Text(uiText('Такие суммы не входят в общие итоги.')),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
@@ -160,7 +161,7 @@ class MissingRatesNotice extends StatelessWidget {
                             onAddRate(parts.first, parts.last);
                           },
                           icon: const Icon(Icons.add, size: 18),
-                          label: Text('Курс $pair'),
+                          label: Text(uiText('Курс {0}', [pair])),
                         ),
                     ],
                   ),
@@ -259,13 +260,13 @@ class _TagsFieldState extends State<TagsField> {
           controller: controller,
           maxLength: TagRules.maxLength,
           decoration: InputDecoration(
-            labelText: 'Теги',
-            hintText: 'Например: отпуск',
+            labelText: uiText('Теги'),
+            hintText: uiText('Например: отпуск'),
             border: const OutlineInputBorder(),
             errorText: error,
             counterText: '',
             suffixIcon: IconButton(
-              tooltip: 'Добавить тег',
+              tooltip: uiText('Добавить тег'),
               icon: const Icon(Icons.add),
               onPressed: () => add(controller.text),
             ),
@@ -288,7 +289,7 @@ class _TagsFieldState extends State<TagsField> {
                   for (final t in widget.tags)
                     if (t != tag) t,
                 ]),
-                deleteButtonTooltipMessage: 'Убрать тег $tag',
+                deleteButtonTooltipMessage: uiText('Убрать тег {0}', [tag]),
               ),
             for (final tag in suggestions)
               ActionChip(
@@ -317,9 +318,9 @@ class EditorActions extends StatelessWidget {
       ?extra,
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Отмена'),
+        child: Text(uiText('Отмена')),
       ),
-      FilledButton(onPressed: onSave, child: const Text('Сохранить')),
+      FilledButton(onPressed: onSave, child: Text(uiText('Сохранить'))),
     ],
   );
 }
@@ -367,11 +368,11 @@ class DateRow extends StatelessWidget {
     contentPadding: EdgeInsets.zero,
     leading: const Icon(Icons.calendar_today_outlined),
     title: Text(label),
-    subtitle: Text(value == null ? emptyText : dayTitle(value!)),
+    subtitle: Text(value == null ? uiText(emptyText) : dayTitle(value!)),
     onTap: onPick,
     trailing: value != null && onClear != null
         ? IconButton(
-            tooltip: 'Очистить: $label',
+            tooltip: uiText('Очистить: {0}', [label]),
             icon: const Icon(Icons.close),
             onPressed: onClear,
           )
@@ -402,7 +403,7 @@ class CurrencyField extends StatelessWidget {
     initialValue: value,
     isExpanded: true,
     decoration: InputDecoration(
-      labelText: label,
+      labelText: uiText(label),
       border: const OutlineInputBorder(),
     ),
     items: [
@@ -450,13 +451,18 @@ class AccountField extends StatelessWidget {
       initialValue: current,
       isExpanded: true,
       decoration: InputDecoration(
-        labelText: label,
+        labelText: uiText(label),
         border: const OutlineInputBorder(),
       ),
-      validator: allowNone ? null : (v) => v == null ? 'Выберите счёт' : null,
+      validator: allowNone
+          ? null
+          : (v) => v == null ? uiText('Выберите счёт') : null,
       items: [
         if (allowNone)
-          DropdownMenuItem<String?>(value: null, child: Text(noneLabel)),
+          DropdownMenuItem<String?>(
+            value: null,
+            child: Text(uiText(noneLabel)),
+          ),
         for (final a in accounts)
           DropdownMenuItem<String?>(
             value: a.id,
@@ -470,8 +476,8 @@ class AccountField extends StatelessWidget {
             value: current,
             child: Text(
               store.account(current) == null
-                  ? 'Удалённый счёт'
-                  : '${store.account(current)!.name} (в архиве)',
+                  ? uiText('Удалённый счёт')
+                  : uiText('{0} (в архиве)', [store.account(current)!.name]),
               overflow: TextOverflow.ellipsis,
             ),
           ),

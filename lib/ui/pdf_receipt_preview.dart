@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import '../l10n/app_strings.dart';
 
 import '../domain/pdf_receipt.dart';
 import 'design.dart';
@@ -17,7 +17,7 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
   late final _positions = widget.receipt.positions.toList();
   late int? _total = widget.receipt.total;
   late final _totalInput = TextEditingController(
-    text: _total == null ? '' : PdfReceipt.formatAmount(_total!),
+    text: _total == null ? '' : localDecimal(PdfReceipt.formatAmount(_total!)),
   );
 
   @override
@@ -52,7 +52,7 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
     final difference =
         (_total ?? receipt.positionsTotal) - receipt.positionsTotal;
     return Scaffold(
-      appBar: AppBar(title: const Text('Позиции чека')),
+      appBar: AppBar(title: Text(uiText('Позиции чека'))),
       body: SafeArea(
         child: Align(
           alignment: Alignment.topCenter,
@@ -62,20 +62,22 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
               children: [
                 if (receipt.date case final date?)
-                  Text(DateFormat('d MMMM y, HH:mm', 'ru').format(date))
+                  Text(localDateFormat('d MMMM y, HH:mm').format(date))
                 else
-                  const Text(
-                    'Дата не распознана. Проверьте её в форме операции.',
+                  Text(
+                    uiText(
+                      'Дата не распознана. Проверьте её в форме операции.',
+                    ),
                   ),
                 const SizedBox(height: 12),
                 TextFormField(
                   controller: _totalInput,
                   decoration: InputDecoration(
-                    labelText: 'Итог чека, ₽',
+                    labelText: uiText('Итог чека, ₽'),
                     border: const OutlineInputBorder(),
                     helperText: (_total ?? 0) > 0
                         ? null
-                        : 'Введите итоговую сумму с чека',
+                        : uiText('Введите итоговую сумму с чека'),
                   ),
                   keyboardType: const TextInputType.numberWithOptions(
                     decimal: true,
@@ -84,11 +86,17 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
                       setState(() => _total = PdfReceipt.parseAmount(value)),
                 ),
                 const SizedBox(height: 12),
-                Text('Сумма позиций: ${money(receipt.positionsTotal, 'RUB')}'),
+                Text(
+                  uiText('Сумма позиций: {0}', [
+                    money(receipt.positionsTotal, 'RUB'),
+                  ]),
+                ),
                 if (difference != 0)
                   Text(
-                    'Расхождение: ${money(difference.abs(), 'RUB')}. '
-                    'Проверьте позиции и итог по PDF.',
+                    uiText(
+                      'Расхождение: {0}. Проверьте позиции и итог по PDF.',
+                      [money(difference.abs(), 'RUB')],
+                    ),
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
@@ -98,10 +106,10 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     title: Text(_positions[i].name),
-                    subtitle: Text(_positions[i].description),
+                    subtitle: Text(localDecimal(_positions[i].description)),
                     onTap: () => _editPosition(i),
                     trailing: IconButton(
-                      tooltip: 'Убрать позицию',
+                      tooltip: uiText('Убрать позицию'),
                       icon: const Icon(Icons.delete_outline),
                       onPressed: () => setState(() => _positions.removeAt(i)),
                     ),
@@ -109,14 +117,14 @@ class _PdfReceiptPreviewState extends State<PdfReceiptPreview> {
                 TextButton.icon(
                   onPressed: _editPosition,
                   icon: const Icon(Icons.add),
-                  label: const Text('Добавить позицию'),
+                  label: Text(uiText('Добавить позицию')),
                 ),
                 const SizedBox(height: 12),
                 FilledButton(
                   onPressed: _positions.isEmpty || (_total ?? 0) <= 0
                       ? null
                       : () => Navigator.pop(context, receipt),
-                  child: const Text('Использовать чек'),
+                  child: Text(uiText('Использовать чек')),
                 ),
               ],
             ),
@@ -143,12 +151,12 @@ class _PositionEditorState extends State<_PositionEditor> {
   late final _price = TextEditingController(
     text: widget.position == null
         ? ''
-        : PdfReceipt.formatAmount(widget.position!.price),
+        : localDecimal(PdfReceipt.formatAmount(widget.position!.price)),
   );
   late final _total = TextEditingController(
     text: widget.position == null
         ? ''
-        : PdfReceipt.formatAmount(widget.position!.total),
+        : localDecimal(PdfReceipt.formatAmount(widget.position!.total)),
   );
 
   @override
@@ -161,7 +169,7 @@ class _PositionEditorState extends State<_PositionEditor> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Позиция чека'),
+    title: Text(uiText('Позиция чека')),
     scrollable: true,
     content: Form(
       key: _form,
@@ -170,21 +178,21 @@ class _PositionEditorState extends State<_PositionEditor> {
         children: [
           TextFormField(
             controller: _name,
-            decoration: const InputDecoration(labelText: 'Товар'),
+            decoration: InputDecoration(labelText: uiText('Товар')),
             validator: (value) =>
-                value!.trim().isEmpty ? 'Введите название' : null,
+                value!.trim().isEmpty ? uiText('Введите название') : null,
           ),
           TextFormField(
             controller: _quantity,
-            decoration: const InputDecoration(labelText: 'Количество'),
+            decoration: InputDecoration(labelText: uiText('Количество')),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             validator: (value) => PdfReceipt.parseQuantity(value!) == null
-                ? 'Введите количество'
+                ? uiText('Введите количество')
                 : null,
           ),
           for (final (controller, label) in [
-            (_price, 'Цена, ₽'),
-            (_total, 'Сумма, ₽'),
+            (_price, uiText('Цена, ₽')),
+            (_total, uiText('Сумма, ₽')),
           ])
             TextFormField(
               controller: controller,
@@ -193,7 +201,7 @@ class _PositionEditorState extends State<_PositionEditor> {
                 decimal: true,
               ),
               validator: (value) => PdfReceipt.parseAmount(value!) == null
-                  ? 'Введите сумму'
+                  ? uiText('Введите сумму')
                   : null,
             ),
         ],
@@ -202,7 +210,7 @@ class _PositionEditorState extends State<_PositionEditor> {
     actions: [
       TextButton(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Отмена'),
+        child: Text(uiText('Отмена')),
       ),
       FilledButton(
         onPressed: () {
@@ -217,7 +225,7 @@ class _PositionEditorState extends State<_PositionEditor> {
             ),
           );
         },
-        child: const Text('Готово'),
+        child: Text(uiText('Готово')),
       ),
     ],
   );
