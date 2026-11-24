@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 import 'package:flutter/services.dart';
 
 import '../domain/pin_hash.dart';
@@ -63,7 +64,7 @@ class _PinPadState extends State<PinPad> {
   Future<void> submit() async {
     if (busy) return;
     if (!PinHash.isValid(pin)) {
-      setState(() => error = 'PIN-код — от 4 до 8 цифр');
+      setState(() => error = uiText('PIN-код — от 4 до 8 цифр'));
       return;
     }
     setState(() => busy = true);
@@ -137,7 +138,7 @@ class _PinPadState extends State<PinPad> {
           ],
           const SizedBox(height: 20),
           Semantics(
-            label: 'Введено цифр: ${pin.length}',
+            label: uiText('Введено цифр: {0}', [pin.length]),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -196,10 +197,14 @@ class _PinPadState extends State<PinPad> {
                     button(
                       const Icon(Icons.backspace_outlined),
                       erase,
-                      label: 'Стереть',
+                      label: uiText('Стереть'),
                     ),
                     button(Text('0', style: digits), () => type('0')),
-                    button(const Icon(Icons.check), submit, label: 'Готово'),
+                    button(
+                      const Icon(Icons.check),
+                      submit,
+                      label: uiText('Готово'),
+                    ),
                   ],
                 ),
               ],
@@ -238,18 +243,16 @@ class _LockScreenState extends State<LockScreen> {
   Future<void> forgot() => showDialog<void>(
     context: context,
     builder: (context) => AlertDialog(
-      title: const Text('Забыли PIN-код?'),
-      content: const Text(
-        'PIN-код нельзя восстановить: он хранится только в виде хеша на этом '
-        'устройстве. Чтобы снять блокировку, очистите данные приложения в '
-        'настройках системы или переустановите его. Записи, которые уже '
-        'синхронизированы с сервером или сохранены в резервной копии, '
-        'вернутся после входа или восстановления.',
+      title: Text(uiText('Забыли PIN-код?')),
+      content: Text(
+        uiText(
+          'PIN-код нельзя восстановить: он хранится только в виде хеша на этом устройстве. Чтобы снять блокировку, очистите данные приложения в настройках системы или переустановите его. Записи, которые уже синхронизированы с сервером или сохранены в резервной копии, вернутся после входа или восстановления.',
+        ),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Понятно'),
+          child: Text(uiText('Понятно')),
         ),
       ],
     ),
@@ -274,12 +277,13 @@ class _LockScreenState extends State<LockScreen> {
                 ),
                 const SizedBox(height: 12),
                 PinPad(
-                  title: 'Введите PIN-код',
+                  title: uiText('Введите PIN-код'),
                   subtitle: wait > 0
-                      ? 'Слишком много попыток. Подождите $wait с'
+                      ? uiText('Слишком много попыток. Подождите {0} с', [wait])
                       : null,
-                  onSubmit: (pin) async =>
-                      await lock.unlock(pin) ? null : 'Неверный PIN-код',
+                  onSubmit: (pin) async => await lock.unlock(pin)
+                      ? null
+                      : uiText('Неверный PIN-код'),
                   extra: Wrap(
                     alignment: WrapAlignment.center,
                     spacing: 8,
@@ -288,11 +292,11 @@ class _LockScreenState extends State<LockScreen> {
                         TextButton.icon(
                           onPressed: lock.unlockWithBiometrics,
                           icon: const Icon(Icons.fingerprint),
-                          label: const Text('По биометрии'),
+                          label: Text(uiText('По биометрии')),
                         ),
                       TextButton(
                         onPressed: forgot,
-                        child: const Text('Забыли PIN-код?'),
+                        child: Text(uiText('Забыли PIN-код?')),
                       ),
                     ],
                   ),
@@ -371,7 +375,7 @@ Future<String?> _pinDialog(
           },
           extra: TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Отмена'),
+            child: Text(uiText('Отмена')),
           ),
         ),
       ),
@@ -383,15 +387,15 @@ Future<String?> _pinDialog(
 Future<String?> askNewPin(BuildContext context) async {
   final first = await _pinDialog(
     context,
-    'Новый PIN-код',
+    uiText('Новый PIN-код'),
     (_) async => null,
-    subtitle: 'От 4 до 8 цифр',
+    subtitle: uiText('От 4 до 8 цифр'),
   );
   if (first == null || !context.mounted) return null;
   return _pinDialog(
     context,
-    'Повторите PIN-код',
-    (pin) async => pin == first ? null : 'PIN-коды не совпадают',
+    uiText('Повторите PIN-код'),
+    (pin) async => pin == first ? null : uiText('PIN-коды не совпадают'),
   );
 }
 
@@ -415,9 +419,9 @@ class PrivacyPanel extends StatelessWidget {
   run;
 
   static String delayTitle(int seconds) => switch (seconds) {
-    0 => 'Сразу',
-    60 => 'Через 1 минуту',
-    _ => 'Через ${seconds ~/ 60} минут',
+    0 => uiText('Сразу'),
+    60 => uiText('Через 1 минуту'),
+    _ => uiText('Через {0} минут', [seconds ~/ 60]),
   };
 
   @override
@@ -428,10 +432,11 @@ class PrivacyPanel extends StatelessWidget {
       children: [
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
-          title: const Text('Блокировка PIN-кодом'),
-          subtitle: const Text(
-            'Скрывает приложение при запуске и после возврата. Данные на '
-            'устройстве не шифруются.',
+          title: Text(uiText('Блокировка PIN-кодом')),
+          subtitle: Text(
+            uiText(
+              'Скрывает приложение при запуске и после возврата. Данные на устройстве не шифруются.',
+            ),
           ),
           value: lock.enabled,
           onChanged: (on) async {
@@ -440,11 +445,15 @@ class PrivacyPanel extends StatelessWidget {
               if (pin != null) {
                 await run(
                   () => lock.enable(pin),
-                  success: 'Блокировка включена',
+                  success: uiText('Блокировка включена'),
                 );
               }
             } else {
-              await confirmWithPin(context, 'Введите PIN-код', lock.disable);
+              await confirmWithPin(
+                context,
+                uiText('Введите PIN-код'),
+                lock.disable,
+              );
             }
           },
         ),
@@ -452,14 +461,16 @@ class PrivacyPanel extends StatelessWidget {
           if (lock.biometricsAvailable)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Вход по биометрии'),
-              subtitle: const Text('Отпечаток пальца или лицо вместо PIN-кода'),
+              title: Text(uiText('Вход по биометрии')),
+              subtitle: Text(
+                uiText('Отпечаток пальца или лицо вместо PIN-кода'),
+              ),
               value: lock.biometrics,
               onChanged: (on) => run(() => lock.setBiometrics(on)),
             ),
           ListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Блокировать после ухода из приложения'),
+            title: Text(uiText('Блокировать после ухода из приложения')),
             trailing: DropdownButton<int>(
               value: AppLock.lockDelays.contains(lock.lockAfter)
                   ? lock.lockAfter
@@ -480,12 +491,14 @@ class PrivacyPanel extends StatelessWidget {
               OutlinedButton(
                 onPressed: () async {
                   String? current;
-                  if (!await confirmWithPin(context, 'Текущий PIN-код', (
-                        pin,
-                      ) async {
-                        await lock.verify(pin);
-                        current = pin;
-                      }) ||
+                  if (!await confirmWithPin(
+                        context,
+                        uiText('Текущий PIN-код'),
+                        (pin) async {
+                          await lock.verify(pin);
+                          current = pin;
+                        },
+                      ) ||
                       !context.mounted) {
                     return;
                   }
@@ -493,15 +506,15 @@ class PrivacyPanel extends StatelessWidget {
                   if (next != null) {
                     await run(
                       () => lock.changePin(current!, next),
-                      success: 'PIN-код изменён',
+                      success: uiText('PIN-код изменён'),
                     );
                   }
                 },
-                child: const Text('Сменить PIN-код'),
+                child: Text(uiText('Сменить PIN-код')),
               ),
               TextButton(
                 onPressed: lock.lockNow,
-                child: const Text('Заблокировать сейчас'),
+                child: Text(uiText('Заблокировать сейчас')),
               ),
             ],
           ),
@@ -510,10 +523,11 @@ class PrivacyPanel extends StatelessWidget {
             Theme.of(context).platform == TargetPlatform.iOS)
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Скрывать в недавних приложениях'),
-            subtitle: const Text(
-              'В переключателе приложений вместо сумм — заставка. На Android '
-              'ниже 13 это также запрещает снимки экрана.',
+            title: Text(uiText('Скрывать в недавних приложениях')),
+            subtitle: Text(
+              uiText(
+                'В переключателе приложений вместо сумм — заставка. На Android ниже 13 это также запрещает снимки экрана.',
+              ),
             ),
             value: lock.hideInRecents,
             onChanged: (on) => run(() => lock.setHideInRecents(on)),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 import 'package:uuid/uuid.dart';
 
 import '../domain/finance.dart';
@@ -25,12 +26,12 @@ InputDecoration _decoration(String label, {String? helper}) => InputDecoration(
 
 String? _positive(String? v, {String message = 'Введите положительную сумму'}) {
   final m = parseAmount(v ?? '');
-  return m == null || m <= 0 ? message : null;
+  return m == null || m <= 0 ? uiText(message) : null;
 }
 
 String? _nonNegative(String? v) {
   if ((v ?? '').trim().isEmpty) return null;
-  return parseAmount(v ?? '') == null ? 'Введите сумму' : null;
+  return parseAmount(v ?? '') == null ? uiText('Введите сумму') : null;
 }
 
 /// UTC noon of a local calendar day, so the UTC date of a recurring start or
@@ -109,21 +110,24 @@ class _AccountEditorState extends State<AccountEditor> {
         children: [
           _title(
             context,
-            widget.existing == null ? 'Новый счёт' : 'Изменить счёт',
+            widget.existing == null
+                ? uiText('Новый счёт')
+                : uiText('Изменить счёт'),
           ),
           TextFormField(
             controller: name,
             autofocus: widget.existing == null,
             maxLength: 80,
-            decoration: _decoration('Название'),
-            validator: (s) =>
-                (s ?? '').trim().isEmpty ? 'Введите название счёта' : null,
+            decoration: _decoration(uiText('Название')),
+            validator: (s) => (s ?? '').trim().isEmpty
+                ? uiText('Введите название счёта')
+                : null,
           ),
           _gap,
           DropdownButtonFormField<AccountKind>(
             initialValue: kind,
             isExpanded: true,
-            decoration: _decoration('Тип'),
+            decoration: _decoration(uiText('Тип')),
             items: [
               for (final k in AccountKind.values)
                 DropdownMenuItem(
@@ -132,7 +136,7 @@ class _AccountEditorState extends State<AccountEditor> {
                     children: [
                       Icon(categoryIcons[accountIcon(k)], size: 20),
                       const SizedBox(width: 12),
-                      Text(k.title),
+                      Text(uiText(k.title)),
                     ],
                   ),
                 ),
@@ -144,17 +148,19 @@ class _AccountEditorState extends State<AccountEditor> {
             value: currency,
             options: currencyOptions(widget.store, currency),
             onChanged: (c) => setState(() => currency = c ?? currency),
-            label: 'Валюта счёта',
+            label: uiText('Валюта счёта'),
           ),
           if (widget.existing != null)
-            const Padding(
+            Padding(
               padding: EdgeInsets.only(top: 6),
               child: Text(
-                'При смене валюты суммы операций счёта не пересчитываются.',
+                uiText(
+                  'При смене валюты суммы операций счёта не пересчитываются.',
+                ),
               ),
             ),
           _gap,
-          Text('Цвет', style: Theme.of(context).textTheme.titleSmall),
+          Text(uiText('Цвет'), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           ColorChoice(
             value: color,
@@ -163,9 +169,9 @@ class _AccountEditorState extends State<AccountEditor> {
           if (widget.existing != null)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('В архиве'),
-              subtitle: const Text(
-                'Счёт скрыт из выбора, но его баланс входит в общий.',
+              title: Text(uiText('В архиве')),
+              subtitle: Text(
+                uiText('Счёт скрыт из выбора, но его баланс входит в общий.'),
               ),
               value: archived,
               onChanged: (v) => setState(() => archived = v),
@@ -270,17 +276,20 @@ class _TransferEditorState extends State<TransferEditor> {
         children: [
           _title(
             context,
-            widget.existing == null ? 'Новый перевод' : 'Изменить перевод',
+            widget.existing == null
+                ? uiText('Новый перевод')
+                : uiText('Изменить перевод'),
           ),
-          const Text(
-            'Перевод между своими счетами — не доход и не расход: он не '
-            'входит в аналитику и бюджеты.',
+          Text(
+            uiText(
+              'Перевод между своими счетами — не доход и не расход: он не входит в аналитику и бюджеты.',
+            ),
           ),
           _gap,
           AccountField(
             store: widget.store,
             value: from,
-            label: 'Со счёта',
+            label: uiText('Со счёта'),
             allowNone: false,
             onChanged: (v) => setState(() => from = v),
           ),
@@ -288,7 +297,7 @@ class _TransferEditorState extends State<TransferEditor> {
           AccountField(
             store: widget.store,
             value: to,
-            label: 'На счёт',
+            label: uiText('На счёт'),
             allowNone: false,
             exclude: from,
             onChanged: (v) => setState(() => to = v),
@@ -298,10 +307,14 @@ class _TransferEditorState extends State<TransferEditor> {
             controller: amount,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: _decoration(
-              from == null ? 'Сумма' : 'Сумма, ${currencyOf(from)}',
+              from == null
+                  ? uiText('Сумма')
+                  : uiText('Сумма, {0}', [currencyOf(from)]),
             ),
             validator: (v) {
-              if (from != null && from == to) return 'Счета должны различаться';
+              if (from != null && from == to) {
+                return uiText('Счета должны различаться');
+              }
               return _positive(v);
             },
           ),
@@ -313,15 +326,17 @@ class _TransferEditorState extends State<TransferEditor> {
                 decimal: true,
               ),
               decoration: _decoration(
-                'Зачислено, ${currencyOf(to)}',
-                helper: 'Валюты счетов различаются: укажите сумму зачисления.',
+                uiText('Зачислено, {0}', [currencyOf(to)]),
+                helper: uiText(
+                  'Валюты счетов различаются: укажите сумму зачисления.',
+                ),
               ),
               validator: _positive,
             ),
           ],
           const SizedBox(height: 8),
           DateRow(
-            label: 'Дата',
+            label: uiText('Дата'),
             value: date,
             onPick: () async {
               final d = await pickDay(context, date);
@@ -332,7 +347,7 @@ class _TransferEditorState extends State<TransferEditor> {
           TextFormField(
             controller: note,
             maxLength: 4000,
-            decoration: _decoration('Заметка'),
+            decoration: _decoration(uiText('Заметка')),
           ),
           const SizedBox(height: 16),
           EditorActions(onSave: save),
@@ -443,13 +458,13 @@ class _RecurringEditorState extends State<RecurringEditor> {
           _title(
             context,
             e == null
-                ? 'Новый регулярный платёж'
-                : 'Изменить регулярный платёж',
+                ? uiText('Новый регулярный платёж')
+                : uiText('Изменить регулярный платёж'),
           ),
           SegmentedButton<String>(
-            segments: const [
-              ButtonSegment(value: 'expense', label: Text('Расход')),
-              ButtonSegment(value: 'income', label: Text('Доход')),
+            segments: [
+              ButtonSegment(value: 'expense', label: Text(uiText('Расход'))),
+              ButtonSegment(value: 'income', label: Text(uiText('Доход'))),
             ],
             selected: {kind},
             onSelectionChanged: (s) => setState(() {
@@ -461,7 +476,7 @@ class _RecurringEditorState extends State<RecurringEditor> {
           TextFormField(
             controller: amount,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: _decoration('Сумма'),
+            decoration: _decoration(uiText('Сумма')),
             validator: _positive,
           ),
           _gap,
@@ -469,12 +484,15 @@ class _RecurringEditorState extends State<RecurringEditor> {
             key: ValueKey('recurring-category-$kind'),
             initialValue: category.name,
             isExpanded: true,
-            decoration: _decoration('Категория'),
+            decoration: _decoration(uiText('Категория')),
             items: [
               for (final c in choices)
                 DropdownMenuItem(
                   value: c.name,
-                  child: Text(c.name, overflow: TextOverflow.ellipsis),
+                  child: Text(
+                    categoryTitle(c.name),
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
             ],
             onChanged: (v) => setState(
@@ -498,7 +516,7 @@ class _RecurringEditorState extends State<RecurringEditor> {
           TextFormField(
             controller: note,
             maxLength: 4000,
-            decoration: _decoration('Заметка'),
+            decoration: _decoration(uiText('Заметка')),
           ),
           const SizedBox(height: 8),
           TagsField(
@@ -515,12 +533,15 @@ class _RecurringEditorState extends State<RecurringEditor> {
                 child: DropdownButtonFormField<String>(
                   initialValue: frequency,
                   isExpanded: true,
-                  decoration: _decoration('Повтор'),
+                  decoration: _decoration(uiText('Повтор')),
                   items: [
                     for (final f in frequencies.entries)
                       DropdownMenuItem(
                         value: f.key,
-                        child: Text(f.value, overflow: TextOverflow.ellipsis),
+                        child: Text(
+                          uiText(f.value),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                   ],
                   onChanged: (v) => setState(() => frequency = v ?? frequency),
@@ -532,7 +553,7 @@ class _RecurringEditorState extends State<RecurringEditor> {
                 child: TextFormField(
                   controller: interval,
                   keyboardType: TextInputType.number,
-                  decoration: _decoration('Интервал'),
+                  decoration: _decoration(uiText('Интервал')),
                   validator: (v) {
                     final n = int.tryParse((v ?? '').trim());
                     return n == null || n < 1 || n > 999 ? '1–999' : null;
@@ -543,7 +564,7 @@ class _RecurringEditorState extends State<RecurringEditor> {
           ),
           const SizedBox(height: 8),
           DateRow(
-            label: 'Начало',
+            label: uiText('Начало'),
             value: start,
             onPick: () async {
               final d = await pickDay(context, start);
@@ -551,9 +572,9 @@ class _RecurringEditorState extends State<RecurringEditor> {
             },
           ),
           DateRow(
-            label: 'Окончание',
+            label: uiText('Окончание'),
             value: end,
-            emptyText: 'Без окончания',
+            emptyText: uiText('Без окончания'),
             onPick: () async {
               final d = await pickDay(context, end ?? start, first: start);
               if (d != null) setState(() => end = d);
@@ -562,15 +583,15 @@ class _RecurringEditorState extends State<RecurringEditor> {
           ),
           const SizedBox(height: 8),
           SegmentedButton<String>(
-            segments: const [
+            segments: [
               ButtonSegment(
                 value: 'auto',
-                label: Text('Автоматически'),
+                label: Text(uiText('Автоматически')),
                 icon: Icon(Icons.autorenew),
               ),
               ButtonSegment(
                 value: 'remind',
-                label: Text('Напоминать'),
+                label: Text(uiText('Напоминать')),
                 icon: Icon(Icons.notifications_none),
               ),
             ],
@@ -580,16 +601,17 @@ class _RecurringEditorState extends State<RecurringEditor> {
           const SizedBox(height: 8),
           Text(
             mode == 'auto'
-                ? 'Операции создаются сами в день платежа.'
-                : 'В день платежа операция появится в блоке «Ожидают»: '
-                      'её можно записать или пропустить.',
+                ? uiText('Операции создаются сами в день платежа.')
+                : uiText(
+                    'В день платежа операция появится в блоке «Ожидают»: её можно записать или пропустить.',
+                  ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           if (e != null)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Пауза'),
-              subtitle: const Text('Ничего не создаётся и не напоминается.'),
+              title: Text(uiText('Пауза')),
+              subtitle: Text(uiText('Ничего не создаётся и не напоминается.')),
               value: paused,
               onChanged: (v) => setState(() => paused = v),
             ),
@@ -678,28 +700,32 @@ class _GoalEditorState extends State<GoalEditor> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _title(context, e == null ? 'Новая цель' : 'Изменить цель'),
+          _title(
+            context,
+            e == null ? uiText('Новая цель') : uiText('Изменить цель'),
+          ),
           TextFormField(
             controller: name,
             autofocus: e == null,
             maxLength: 80,
-            decoration: _decoration('Название'),
-            validator: (s) =>
-                (s ?? '').trim().isEmpty ? 'Введите название цели' : null,
+            decoration: _decoration(uiText('Название')),
+            validator: (s) => (s ?? '').trim().isEmpty
+                ? uiText('Введите название цели')
+                : null,
           ),
           _gap,
           AccountField(
             store: widget.store,
             value: accountId,
-            label: 'Копить на счёте',
-            noneLabel: 'Не привязана к счёту',
+            label: uiText('Копить на счёте'),
+            noneLabel: uiText('Не привязана к счёту'),
             onChanged: (v) => setState(() => accountId = v),
           ),
           const SizedBox(height: 6),
           Text(
             accountId == null
-                ? 'Прогресс — сумма в поле «Накоплено».'
-                : 'Прогресс — баланс выбранного счёта.',
+                ? uiText('Прогресс — сумма в поле «Накоплено».')
+                : uiText('Прогресс — баланс выбранного счёта.'),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           _gap,
@@ -715,7 +741,7 @@ class _GoalEditorState extends State<GoalEditor> {
           TextFormField(
             controller: target,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: _decoration('Цель, сумма'),
+            decoration: _decoration(uiText('Цель, сумма')),
             validator: _positive,
           ),
           if (accountId == null) ...[
@@ -725,15 +751,15 @@ class _GoalEditorState extends State<GoalEditor> {
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: _decoration('Накоплено'),
+              decoration: _decoration(uiText('Накоплено')),
               validator: _nonNegative,
             ),
           ],
           const SizedBox(height: 8),
           DateRow(
-            label: 'Срок',
+            label: uiText('Срок'),
             value: deadline,
-            emptyText: 'Без срока',
+            emptyText: uiText('Без срока'),
             onPick: () async {
               final d = await pickDay(context, deadline ?? DateTime.now());
               if (d != null) setState(() => deadline = d);
@@ -741,7 +767,7 @@ class _GoalEditorState extends State<GoalEditor> {
             onClear: () => setState(() => deadline = null),
           ),
           const SizedBox(height: 8),
-          Text('Цвет', style: Theme.of(context).textTheme.titleSmall),
+          Text(uiText('Цвет'), style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 8),
           ColorChoice(
             value: color,
@@ -750,7 +776,7 @@ class _GoalEditorState extends State<GoalEditor> {
           if (e != null)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('В архиве'),
+              title: Text(uiText('В архиве')),
               value: archived,
               onChanged: (v) => setState(() => archived = v),
             ),
@@ -840,11 +866,14 @@ class _DebtEditorState extends State<DebtEditor> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _title(context, e == null ? 'Новый долг' : 'Изменить долг'),
+          _title(
+            context,
+            e == null ? uiText('Новый долг') : uiText('Изменить долг'),
+          ),
           SegmentedButton<String>(
             segments: [
               for (final d in DebtDirection.values)
-                ButtonSegment(value: d.name, label: Text(d.title)),
+                ButtonSegment(value: d.name, label: Text(uiText(d.title))),
             ],
             selected: {direction},
             onSelectionChanged: (s) => setState(() => direction = s.first),
@@ -854,16 +883,18 @@ class _DebtEditorState extends State<DebtEditor> {
             controller: person,
             maxLength: 80,
             decoration: _decoration(
-              direction == 'iOwe' ? 'Кому я должен' : 'Кто должен',
+              direction == 'iOwe'
+                  ? uiText('Кому я должен')
+                  : uiText('Кто должен'),
             ),
             validator: (s) =>
-                (s ?? '').trim().isEmpty ? 'Укажите, кто должен' : null,
+                (s ?? '').trim().isEmpty ? uiText('Укажите, кто должен') : null,
           ),
           _gap,
           TextFormField(
             controller: amount,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: _decoration('Сумма долга'),
+            decoration: _decoration(uiText('Сумма долга')),
             validator: _positive,
           ),
           _gap,
@@ -876,20 +907,20 @@ class _DebtEditorState extends State<DebtEditor> {
           TextFormField(
             controller: repaid,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: _decoration('Уже возвращено'),
+            decoration: _decoration(uiText('Уже возвращено')),
             validator: (v) {
               final error = _nonNegative(v);
               if (error != null) return error;
               final total = parseAmount(amount.text);
               final back = (v ?? '').trim().isEmpty ? 0 : parseAmount(v!)!;
               return total != null && back > total
-                  ? 'Больше суммы долга'
+                  ? uiText('Больше суммы долга')
                   : null;
             },
           ),
           const SizedBox(height: 8),
           DateRow(
-            label: 'Дата',
+            label: uiText('Дата'),
             value: date,
             onPick: () async {
               final d = await pickDay(context, date);
@@ -897,9 +928,9 @@ class _DebtEditorState extends State<DebtEditor> {
             },
           ),
           DateRow(
-            label: 'Вернуть до',
+            label: uiText('Вернуть до'),
             value: due,
-            emptyText: 'Без срока',
+            emptyText: uiText('Без срока'),
             onPick: () async {
               final d = await pickDay(context, due ?? date);
               if (d != null) setState(() => due = d);
@@ -910,19 +941,20 @@ class _DebtEditorState extends State<DebtEditor> {
           TextFormField(
             controller: note,
             maxLength: 4000,
-            decoration: _decoration('Заметка'),
+            decoration: _decoration(uiText('Заметка')),
           ),
           if (e != null)
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Закрыт'),
+              title: Text(uiText('Закрыт')),
               value: closed,
               onChanged: (v) => setState(() => closed = v),
             ),
           const SizedBox(height: 8),
           Text(
-            'Долги не меняют баланс. Деньги, которые реально ушли или пришли, '
-            'запишите обычной операцией.',
+            uiText(
+              'Долги не меняют баланс. Деньги, которые реально ушли или пришли, запишите обычной операцией.',
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 24),
@@ -1005,13 +1037,16 @@ class _RateEditorState extends State<RateEditor> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _title(context, e == null ? 'Новый курс' : 'Изменить курс'),
+            _title(
+              context,
+              e == null ? uiText('Новый курс') : uiText('Изменить курс'),
+            ),
             Row(
               children: [
                 Expanded(
                   child: CurrencyField(
                     value: from,
-                    label: 'Из',
+                    label: uiText('Из'),
                     options: options,
                     onChanged: (c) => setState(() => from = c ?? from),
                   ),
@@ -1023,7 +1058,7 @@ class _RateEditorState extends State<RateEditor> {
                 Expanded(
                   child: CurrencyField(
                     value: to,
-                    label: 'В',
+                    label: uiText('В'),
                     options: currencyOptions(widget.store, to),
                     onChanged: (c) => setState(() => to = c ?? to),
                   ),
@@ -1037,24 +1072,24 @@ class _RateEditorState extends State<RateEditor> {
                 decimal: true,
               ),
               decoration: _decoration(
-                'Курс: 1 $from = ? $to',
-                helper: 'До 6 знаков после запятой.',
+                uiText('Курс: 1 {0} = ? {1}', [from, to]),
+                helper: uiText('До 6 знаков после запятой.'),
               ),
               validator: (v) {
-                if (from == to) return 'Валюты должны различаться';
+                if (from == to) return uiText('Валюты должны различаться');
                 try {
                   RateRecord.parseRateMicros(
                     (v ?? '').trim().replaceAll(',', '.'),
                   );
                   return null;
                 } on FormatException catch (error) {
-                  return error.message;
+                  return uiText(error.message);
                 }
               },
             ),
             const SizedBox(height: 8),
             DateRow(
-              label: 'Дата курса',
+              label: uiText('Дата курса'),
               value: date,
               onPick: () async {
                 final d = await pickDay(context, date);

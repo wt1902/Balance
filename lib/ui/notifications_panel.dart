@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 
 import '../services/app_lock.dart';
 import '../services/app_store.dart';
@@ -28,10 +29,11 @@ class NotificationsPanel extends StatelessWidget {
         children: [
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Предупреждать о бюджете'),
-            subtitle: const Text(
-              'Когда расходы по бюджету месяца достигают 80% и 100% лимита. '
-              'В уведомлении только проценты, без сумм.',
+            title: Text(uiText('Предупреждать о бюджете')),
+            subtitle: Text(
+              uiText(
+                'Когда расходы по бюджету месяца достигают 80% и 100% лимита. В уведомлении только проценты, без сумм.',
+              ),
             ),
             value: n.budgetAlerts,
             // The permission prompt is system UI, not leaving the app.
@@ -47,12 +49,15 @@ class NotificationsPanel extends StatelessWidget {
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Напоминать внести траты'),
+            title: Text(uiText('Напоминать внести траты')),
             subtitle: Text(
               Notifications.canSchedule
-                  ? 'Каждый день в выбранное время. Если сегодня уже есть '
-                        'операции, напоминание переносится на завтра.'
-                  : 'Недоступно на этой платформе: нет уведомлений по расписанию.',
+                  ? uiText(
+                      'Каждый день в выбранное время. Если сегодня уже есть операции, напоминание переносится на завтра.',
+                    )
+                  : uiText(
+                      'Недоступно на этой платформе: нет уведомлений по расписанию.',
+                    ),
             ),
             value: n.reminder,
             onChanged: Notifications.canSchedule
@@ -69,7 +74,7 @@ class NotificationsPanel extends StatelessWidget {
           if (n.reminder && Notifications.canSchedule)
             ListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Время напоминания'),
+              title: Text(uiText('Время напоминания')),
               trailing: OutlinedButton.icon(
                 icon: const Icon(Icons.schedule),
                 label: Text(time.format(context)),

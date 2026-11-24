@@ -1,8 +1,8 @@
 import 'package:cross_file/cross_file.dart';
+import '../l10n/app_strings.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:intl/intl.dart';
 
 import '../domain/finance.dart';
 import '../domain/records.dart';
@@ -40,7 +40,8 @@ Future<void> editTransfer(
 }) async {
   if (existing == null && store.activeAccounts.length < 2) {
     await run(
-      () async => throw ArgumentError('Для перевода нужны хотя бы два счёта'),
+      () async =>
+          throw ArgumentError(uiText('Для перевода нужны хотя бы два счёта')),
     );
     return;
   }
@@ -103,7 +104,7 @@ Future<void> editRate(
     RateEditor(store: store, existing: existing, from: from, to: to),
   );
   if (result != null) {
-    await run(() => store.saveRate(result), success: 'Курс сохранён');
+    await run(() => store.saveRate(result), success: uiText('Курс сохранён'));
   }
 }
 
@@ -141,7 +142,7 @@ Future<String?> askText(
                 maxLength: 80,
                 decoration: InputDecoration(labelText: label),
                 validator: (s) =>
-                    (s ?? '').trim().isEmpty ? 'Заполните поле' : null,
+                    (s ?? '').trim().isEmpty ? uiText('Заполните поле') : null,
               ),
             ],
           ),
@@ -150,7 +151,7 @@ Future<String?> askText(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Отмена'),
+          child: Text(uiText('Отмена')),
         ),
         FilledButton(
           onPressed: () {
@@ -158,7 +159,7 @@ Future<String?> askText(
               Navigator.pop(context, controller.text.trim());
             }
           },
-          child: Text(action),
+          child: Text(uiText(action)),
         ),
       ],
     ),
@@ -189,9 +190,10 @@ Future<int?> askBalance(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Укажите фактический остаток. Разница сохранится '
-                'корректировкой и не повлияет на аналитику.',
+              Text(
+                uiText(
+                  'Укажите фактический остаток. Разница сохранится корректировкой и не повлияет на аналитику.',
+                ),
               ),
               const SizedBox(height: 16),
               TextFormField(
@@ -201,10 +203,10 @@ Future<int?> askBalance(
                   signed: true,
                 ),
                 decoration: InputDecoration(
-                  labelText: 'Фактический баланс, $currency',
+                  labelText: uiText('Фактический баланс, {0}', [currency]),
                 ),
                 validator: (s) => parseAmount(s ?? '', signed: true) == null
-                    ? 'Введите сумму'
+                    ? uiText('Введите сумму')
                     : null,
               ),
             ],
@@ -214,7 +216,7 @@ Future<int?> askBalance(
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Отмена'),
+          child: Text(uiText('Отмена')),
         ),
         FilledButton(
           onPressed: () {
@@ -225,7 +227,7 @@ Future<int?> askBalance(
               );
             }
           },
-          child: const Text('Сохранить'),
+          child: Text(uiText('Сохранить')),
         ),
       ],
     ),
@@ -263,7 +265,7 @@ class AccountsSection extends StatelessWidget {
       contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
       leading: CategoryAvatar(icon: a.icon, color: a.colorName),
       title: Text(a.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-      subtitle: Text('${a.kind.title} · $currency'),
+      subtitle: Text('${uiText(a.kind.title)} · $currency'),
       onTap: () => editAccount(context, store, run, a),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -276,13 +278,15 @@ class AccountsSection extends StatelessWidget {
             ),
           ),
           _menu(
-            'Действия со счётом',
+            uiText('Действия со счётом'),
             {
-              'edit': 'Изменить',
-              if (!a.isArchived) 'transfer': 'Перевод с этого счёта',
-              'adjust': 'Скорректировать баланс',
-              'archive': a.isArchived ? 'Вернуть из архива' : 'В архив',
-              'delete': 'Удалить',
+              'edit': uiText('Изменить'),
+              if (!a.isArchived) 'transfer': uiText('Перевод с этого счёта'),
+              'adjust': uiText('Скорректировать баланс'),
+              'archive': a.isArchived
+                  ? uiText('Вернуть из архива')
+                  : uiText('В архив'),
+              'delete': uiText('Удалить'),
             },
             (v) async {
               switch (v) {
@@ -293,7 +297,7 @@ class AccountsSection extends StatelessWidget {
                 case 'adjust':
                   final target = await askBalance(
                     context,
-                    'Баланс «${a.name}»',
+                    uiText('Баланс «{0}»', [a.name]),
                     currency,
                     balance,
                   );
@@ -314,11 +318,10 @@ class AccountsSection extends StatelessWidget {
                 case 'delete':
                   if (await confirmDelete(
                     context,
-                    'Удалить счёт «${a.name}»?',
-                    message:
-                        'Операции и переводы останутся и будут показаны как '
-                        '«Удалённый счёт». Чтобы просто скрыть счёт, '
-                        'отправьте его в архив.',
+                    uiText('Удалить счёт «{0}»?', [a.name]),
+                    message: uiText(
+                      'Операции и переводы останутся и будут показаны как «Удалённый счёт». Чтобы просто скрыть счёт, отправьте его в архив.',
+                    ),
                   )) {
                     await run(() => store.deleteAccount(a.id));
                   }
@@ -356,7 +359,7 @@ class AccountsSection extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text('Общий баланс'),
+              Text(uiText('Общий баланс')),
               const SizedBox(height: 6),
               FittedBox(
                 fit: BoxFit.scaleDown,
@@ -369,7 +372,9 @@ class AccountsSection extends StatelessWidget {
               ),
               const SizedBox(height: 4),
               Text(
-                'Все счета в базовой валюте $base, архивные тоже.',
+                uiText('Все счета в базовой валюте {0}, архивные тоже.', [
+                  base,
+                ]),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
@@ -383,24 +388,24 @@ class AccountsSection extends StatelessWidget {
             FilledButton.icon(
               onPressed: () => editAccount(context, store, run),
               icon: const Icon(Icons.add),
-              label: const Text('Новый счёт'),
+              label: Text(uiText('Новый счёт')),
             ),
             OutlinedButton.icon(
               onPressed: active.length < 2
                   ? null
                   : () => editTransfer(context, store, run),
               icon: const Icon(Icons.swap_horiz),
-              label: const Text('Перевод'),
+              label: Text(uiText('Перевод')),
             ),
           ],
         ),
         const SizedBox(height: 20),
         if (store.accounts.isEmpty)
-          const EmptyView(
-            title: 'Счетов пока нет',
-            subtitle:
-                'Добавьте наличные, карту или вклад, чтобы видеть баланс '
-                'каждого и записывать переводы.',
+          EmptyView(
+            title: uiText('Счетов пока нет'),
+            subtitle: uiText(
+              'Добавьте наличные, карту или вклад, чтобы видеть баланс каждого и записывать переводы.',
+            ),
             icon: Icons.account_balance_wallet_outlined,
           )
         else
@@ -419,8 +424,8 @@ class AccountsSection extends StatelessWidget {
                       icon: 'ellipsis.circle.fill',
                       color: 'gray',
                     ),
-                    title: const Text('Без счёта'),
-                    subtitle: const Text('Операции без выбранного счёта'),
+                    title: Text(uiText('Без счёта')),
+                    subtitle: Text(uiText('Операции без выбранного счёта')),
                     trailing: Text(
                       [
                         for (final e in unassigned.entries)
@@ -440,8 +445,8 @@ class AccountsSection extends StatelessWidget {
                       icon: 'ellipsis.circle.fill',
                       color: 'slate',
                     ),
-                    title: const Text('Удалённый счёт'),
-                    subtitle: const Text('Остались операции или переводы'),
+                    title: Text(uiText('Удалённый счёт')),
+                    subtitle: Text(uiText('Остались операции или переводы')),
                     trailing: Text(
                       signedMoney(e.value, base),
                       style: const TextStyle(fontWeight: FontWeight.w600),
@@ -455,7 +460,7 @@ class AccountsSection extends StatelessWidget {
           Panel(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: ExpansionTile(
-              title: Text('Архив (${archived.length})'),
+              title: Text(uiText('Архив ({0})', [archived.length])),
               shape: const Border(),
               children: [for (final a in archived) tile(context, a)],
             ),
@@ -472,21 +477,24 @@ class AccountsSection extends StatelessWidget {
 String frequencyTitle(RecurringRecord rule) {
   final n = rule.interval;
   final frequency = rule.frequency;
-  if (frequency == null) return 'Неизвестный повтор';
+  if (frequency == null) return uiText('Неизвестный повтор');
   if (n == 1) {
     return switch (frequency) {
-      RecurrenceFrequency.daily => 'Каждый день',
-      RecurrenceFrequency.weekly => 'Каждую неделю',
-      RecurrenceFrequency.monthly => 'Каждый месяц',
-      RecurrenceFrequency.yearly => 'Каждый год',
+      RecurrenceFrequency.daily => uiText('Каждый день'),
+      RecurrenceFrequency.weekly => uiText('Каждую неделю'),
+      RecurrenceFrequency.monthly => uiText('Каждый месяц'),
+      RecurrenceFrequency.yearly => uiText('Каждый год'),
     };
   }
-  return 'Каждые $n ${switch (frequency) {
-    RecurrenceFrequency.daily => 'дн.',
-    RecurrenceFrequency.weekly => 'нед.',
-    RecurrenceFrequency.monthly => 'мес.',
-    RecurrenceFrequency.yearly => n < 5 ? 'года' : 'лет',
-  }}';
+  return uiText('Каждые {0} {1}', [
+    n,
+    switch (frequency) {
+      RecurrenceFrequency.daily => uiText('дн.'),
+      RecurrenceFrequency.weekly => uiText('нед.'),
+      RecurrenceFrequency.monthly => uiText('мес.'),
+      RecurrenceFrequency.yearly => n < 5 ? uiText('года') : uiText('лет'),
+    },
+  ]);
 }
 
 String _ruleCurrency(AppStore store, RecurringRecord rule) =>
@@ -525,7 +533,7 @@ class PendingRecurringPanel extends StatelessWidget {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Ожидают: ${all.length}',
+                    uiText('Ожидают: {0}', [all.length]),
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                 ),
@@ -559,21 +567,21 @@ class PendingRecurringPanel extends StatelessWidget {
                   FilledButton.tonal(
                     onPressed: () => run(
                       () => store.confirmRecurring(o.rule.id, o.occurrence),
-                      success: 'Операция записана',
+                      success: uiText('Операция записана'),
                     ),
-                    child: const Text('Записать'),
+                    child: Text(uiText('Записать')),
                   ),
                   TextButton(
                     onPressed: () =>
                         run(() => store.skipRecurring(o.rule.id, o.occurrence)),
-                    child: const Text('Пропустить'),
+                    child: Text(uiText('Пропустить')),
                   ),
                 ],
               ),
               const SizedBox(height: 8),
             ],
             if (items.length < all.length)
-              Text('И ещё ${all.length - items.length}'),
+              Text(uiText('И ещё {0}', [all.length - items.length])),
           ],
         ),
       ),
@@ -599,16 +607,16 @@ class RecurringSection extends StatelessWidget {
           child: FilledButton.icon(
             onPressed: () => editRecurring(context, store, run),
             icon: const Icon(Icons.add),
-            label: const Text('Новый платёж'),
+            label: Text(uiText('Новый платёж')),
           ),
         ),
         const SizedBox(height: 20),
         if (rules.isEmpty)
-          const EmptyView(
-            title: 'Регулярных платежей нет',
-            subtitle:
-                'Аренда, связь, подписки, зарплата: операции будут '
-                'создаваться сами или ждать подтверждения.',
+          EmptyView(
+            title: uiText('Регулярных платежей нет'),
+            subtitle: uiText(
+              'Аренда, связь, подписки, зарплата: операции будут создаваться сами или ждать подтверждения.',
+            ),
             icon: Icons.event_repeat,
           )
         else
@@ -637,14 +645,14 @@ class RecurringSection extends StatelessWidget {
                       return [
                         frequencyTitle(rule),
                         rule.mode == RecurringMode.remind
-                            ? 'с напоминанием'
-                            : 'автоматически',
+                            ? uiText('с напоминанием')
+                            : uiText('автоматически'),
                         if (rule.isPaused)
-                          'на паузе'
+                          uiText('на паузе')
                         else if (next != null)
-                          'следующий ${dayTitle(next)}'
+                          uiText('следующий {0}', [dayTitle(next)])
                         else
-                          'завершён',
+                          uiText('завершён'),
                       ].join(' · ');
                     }(), maxLines: 3),
                     onTap: () => editRecurring(context, store, run, rule),
@@ -662,11 +670,13 @@ class RecurringSection extends StatelessWidget {
                           ),
                         ),
                         _menu(
-                          'Действия с платежом',
+                          uiText('Действия с платежом'),
                           {
-                            'edit': 'Изменить',
-                            'pause': rule.isPaused ? 'Возобновить' : 'Пауза',
-                            'delete': 'Удалить',
+                            'edit': uiText('Изменить'),
+                            'pause': rule.isPaused
+                                ? uiText('Возобновить')
+                                : uiText('Пауза'),
+                            'delete': uiText('Удалить'),
                           },
                           (v) async {
                             if (v == 'edit') {
@@ -682,10 +692,10 @@ class RecurringSection extends StatelessWidget {
                               );
                             } else if (await confirmDelete(
                               context,
-                              'Удалить регулярный платёж?',
-                              message:
-                                  'Уже созданные операции останутся. Новые '
-                                  'создаваться не будут.',
+                              uiText('Удалить регулярный платёж?'),
+                              message: uiText(
+                                'Уже созданные операции останутся. Новые создаваться не будут.',
+                              ),
                             )) {
                               await run(() => store.deleteRecurring(rule.id));
                             }
@@ -737,9 +747,11 @@ class GoalsSection extends StatelessWidget {
                     Text(
                       [
                         if (goal.accountId != null)
-                          'Счёт: ${accountName(store, goal.accountId)}',
+                          uiText('Счёт: {0}', [
+                            accountName(store, goal.accountId),
+                          ]),
                         if (goal.deadline != null)
-                          'до ${dayTitle(goal.deadline!)}',
+                          uiText('до {0}', [dayTitle(goal.deadline!)]),
                       ].join(' · '),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
@@ -747,11 +759,13 @@ class GoalsSection extends StatelessWidget {
                 ),
               ),
               _menu(
-                'Действия с целью',
+                uiText('Действия с целью'),
                 {
-                  'edit': 'Изменить',
-                  'archive': goal.isArchived ? 'Вернуть из архива' : 'В архив',
-                  'delete': 'Удалить',
+                  'edit': uiText('Изменить'),
+                  'archive': goal.isArchived
+                      ? uiText('Вернуть из архива')
+                      : uiText('В архив'),
+                  'delete': uiText('Удалить'),
                 },
                 (v) async {
                   if (v == 'edit') {
@@ -767,7 +781,7 @@ class GoalsSection extends StatelessWidget {
                     );
                   } else if (await confirmDelete(
                     context,
-                    'Удалить цель «${goal.name}»?',
+                    uiText('Удалить цель «{0}»?', [goal.name]),
                   )) {
                     await run(() => store.deleteGoal(goal.id));
                   }
@@ -786,7 +800,7 @@ class GoalsSection extends StatelessWidget {
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
-              Text('из ${money(goal.targetMinor, currency)}'),
+              Text(uiText('из {0}', [money(goal.targetMinor, currency)])),
             ],
           ),
           const SizedBox(height: 10),
@@ -799,9 +813,11 @@ class GoalsSection extends StatelessWidget {
           const SizedBox(height: 10),
           Text(
             remaining == 0
-                ? 'Цель достигнута'
-                : 'Осталось: ${money(remaining, currency)} · '
-                      '${(ratio * 100).floor()}%',
+                ? uiText('Цель достигнута')
+                : uiText('Осталось: {0} · {1}%', [
+                    money(remaining, currency),
+                    (ratio * 100).floor(),
+                  ]),
           ),
         ],
       ),
@@ -820,16 +836,16 @@ class GoalsSection extends StatelessWidget {
           child: FilledButton.icon(
             onPressed: () => editGoal(context, store, run),
             icon: const Icon(Icons.add),
-            label: const Text('Новая цель'),
+            label: Text(uiText('Новая цель')),
           ),
         ),
         const SizedBox(height: 20),
         if (goals.isEmpty)
-          const EmptyView(
-            title: 'Целей пока нет',
-            subtitle:
-                'Отпуск, подушка безопасности, техника: следите, сколько '
-                'накоплено и сколько осталось.',
+          EmptyView(
+            title: uiText('Целей пока нет'),
+            subtitle: uiText(
+              'Отпуск, подушка безопасности, техника: следите, сколько накоплено и сколько осталось.',
+            ),
             icon: Icons.flag_outlined,
           ),
         for (final g in goals)
@@ -841,7 +857,7 @@ class GoalsSection extends StatelessWidget {
           Panel(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: ExpansionTile(
-              title: Text('Архив (${archived.length})'),
+              title: Text(uiText('Архив ({0})', [archived.length])),
               shape: const Border(),
               childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
               children: [
@@ -903,7 +919,7 @@ class DebtsSection extends StatelessWidget {
                       [
                         dayTitle(debt.date),
                         if (debt.dueDate != null)
-                          '${overdue ? 'просрочен, срок' : 'вернуть до'} '
+                          '${overdue ? uiText('просрочен, срок') : uiText('вернуть до')} '
                               '${dayTitle(debt.dueDate!)}',
                         if (debt.note.isNotEmpty) debt.note,
                       ].join(' · '),
@@ -915,11 +931,13 @@ class DebtsSection extends StatelessWidget {
                 ),
               ),
               _menu(
-                'Действия с долгом',
+                uiText('Действия с долгом'),
                 {
-                  'edit': 'Изменить',
-                  'close': debt.isClosed ? 'Открыть снова' : 'Закрыть',
-                  'delete': 'Удалить',
+                  'edit': uiText('Изменить'),
+                  'close': debt.isClosed
+                      ? uiText('Открыть снова')
+                      : uiText('Закрыть'),
+                  'delete': uiText('Удалить'),
                 },
                 (v) async {
                   if (v == 'edit') {
@@ -935,7 +953,7 @@ class DebtsSection extends StatelessWidget {
                     );
                   } else if (await confirmDelete(
                     context,
-                    'Удалить долг «${debt.person}»?',
+                    uiText('Удалить долг «{0}»?', [debt.person]),
                   )) {
                     await run(() => store.deleteDebt(debt.id));
                   }
@@ -954,7 +972,9 @@ class DebtsSection extends StatelessWidget {
                   context,
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
               ),
-              Text('осталось из ${money(debt.amountMinor, currency)}'),
+              Text(
+                uiText('осталось из {0}', [money(debt.amountMinor, currency)]),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -964,7 +984,7 @@ class DebtsSection extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
           ),
           const SizedBox(height: 8),
-          Text('Возвращено: ${money(debt.repaidMinor, currency)}'),
+          Text(uiText('Возвращено: {0}', [money(debt.repaidMinor, currency)])),
         ],
       ),
     );
@@ -978,7 +998,7 @@ class DebtsSection extends StatelessWidget {
       final items = open.where((d) => d.direction == direction).toList();
       if (items.isEmpty) return const [];
       return [
-        SectionHeader(direction.title),
+        SectionHeader(uiText(direction.title)),
         for (final d in items)
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -996,20 +1016,21 @@ class DebtsSection extends StatelessWidget {
           child: FilledButton.icon(
             onPressed: () => editDebt(context, store, run),
             icon: const Icon(Icons.add),
-            label: const Text('Новый долг'),
+            label: Text(uiText('Новый долг')),
           ),
         ),
         const SizedBox(height: 12),
         Text(
-          'Долги не меняют баланс и аналитику. Деньги, которые реально ушли '
-          'или пришли, записывайте обычной операцией.',
+          uiText(
+            'Долги не меняют баланс и аналитику. Деньги, которые реально ушли или пришли, записывайте обычной операцией.',
+          ),
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 20),
         if (open.isEmpty)
-          const EmptyView(
-            title: 'Открытых долгов нет',
-            subtitle: 'Записывайте, кому вы должны и кто должен вам.',
+          EmptyView(
+            title: uiText('Открытых долгов нет'),
+            subtitle: uiText('Записывайте, кому вы должны и кто должен вам.'),
             icon: Icons.handshake_outlined,
           ),
         ...group(DebtDirection.owedToMe),
@@ -1018,7 +1039,7 @@ class DebtsSection extends StatelessWidget {
           Panel(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: ExpansionTile(
-              title: Text('Закрытые (${closed.length})'),
+              title: Text(uiText('Закрытые ({0})', [closed.length])),
               shape: const Border(),
               childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
               children: [
@@ -1055,7 +1076,7 @@ class CurrencySettingsPanel extends StatelessWidget {
       children: [
         CurrencyField(
           value: store.baseCurrency,
-          label: 'Базовая валюта',
+          label: uiText('Базовая валюта'),
           options: currencyOptions(store),
           onChanged: (v) {
             if (v != null && v != store.baseCurrency) {
@@ -1065,9 +1086,9 @@ class CurrencySettingsPanel extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         Text(
-          'В базовой валюте считаются общий баланс, аналитика и бюджеты. '
-          'Настройка синхронизируется между устройствами. Суммы в других '
-          'валютах пересчитываются по последнему курсу.',
+          uiText(
+            'В базовой валюте считаются общий баланс, аналитика и бюджеты. Настройка синхронизируется между устройствами. Суммы в других валютах пересчитываются по последнему курсу.',
+          ),
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 16),
@@ -1080,21 +1101,23 @@ class CurrencySettingsPanel extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                'Курсы',
+                uiText('Курсы'),
                 style: Theme.of(context).textTheme.titleSmall,
               ),
             ),
             TextButton.icon(
               onPressed: () => editRate(context, store, run),
               icon: const Icon(Icons.add),
-              label: const Text('Добавить курс'),
+              label: Text(uiText('Добавить курс')),
             ),
           ],
         ),
         if (rates.isEmpty)
-          const Padding(
+          Padding(
             padding: EdgeInsets.symmetric(vertical: 8),
-            child: Text('Курсов нет. Они нужны, только если валют несколько.'),
+            child: Text(
+              uiText('Курсов нет. Они нужны, только если валют несколько.'),
+            ),
           ),
         for (final r in rates)
           ListTile(
@@ -1104,10 +1127,10 @@ class CurrencySettingsPanel extends StatelessWidget {
             subtitle: Text(dayTitle(r.date)),
             onTap: () => editRate(context, store, run, existing: r),
             trailing: IconButton(
-              tooltip: 'Удалить курс',
+              tooltip: uiText('Удалить курс'),
               icon: const Icon(Icons.delete_outline),
               onPressed: () async {
-                if (await confirmDelete(context, 'Удалить курс?')) {
+                if (await confirmDelete(context, uiText('Удалить курс?'))) {
                   await run(() => store.deleteRate(r.id));
                 }
               },
@@ -1127,7 +1150,7 @@ class LedgersPanel extends StatelessWidget {
   final Runner run;
 
   static String roleTitle(String role) =>
-      role == 'owner' ? 'Владелец' : 'Участник';
+      role == 'owner' ? uiText('Владелец') : uiText('Участник');
 
   Future<void> showInvite(BuildContext context, Ledger ledger) async {
     LedgerInvite? invite;
@@ -1137,12 +1160,12 @@ class LedgersPanel extends StatelessWidget {
     await showDialog<void>(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('Приглашение в «${ledger.name}»'),
+        title: Text(uiText('Приглашение в «{0}»', [ledger.name])),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Передайте код участнику. Код одноразовый.'),
+            Text(uiText('Передайте код участнику. Код одноразовый.')),
             const SizedBox(height: 16),
             SelectableText(
               code.code,
@@ -1153,8 +1176,11 @@ class LedgersPanel extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Действует до '
-              '${DateFormat('d MMMM y, HH:mm', 'ru').format(code.expiresAt.toLocal())}',
+              uiText('Действует до {0}', [
+                localDateFormat(
+                  'd MMMM y, HH:mm',
+                ).format(code.expiresAt.toLocal()),
+              ]),
             ),
           ],
         ),
@@ -1162,11 +1188,11 @@ class LedgersPanel extends StatelessWidget {
           TextButton.icon(
             onPressed: () => Clipboard.setData(ClipboardData(text: code.code)),
             icon: const Icon(Icons.copy),
-            label: const Text('Копировать'),
+            label: Text(uiText('Копировать')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Готово'),
+            child: Text(uiText('Готово')),
           ),
         ],
       ),
@@ -1178,14 +1204,14 @@ class LedgersPanel extends StatelessWidget {
         context: context,
         builder: (context) => AlertDialog(
           scrollable: true,
-          title: Text('Участники «${ledger.name}»'),
+          title: Text(uiText('Участники «{0}»', [ledger.name])),
           content: SizedBox(
             width: 420,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (ledger.members.isEmpty)
-                  const Text('Список участников появится после обновления.'),
+                  Text(uiText('Список участников появится после обновления.')),
                 for (final m in ledger.members)
                   ListTile(
                     contentPadding: EdgeInsets.zero,
@@ -1200,7 +1226,7 @@ class LedgersPanel extends StatelessWidget {
                             m.role != 'owner' &&
                             m.userId != store.session?.userId
                         ? IconButton(
-                            tooltip: 'Удалить участника',
+                            tooltip: uiText('Удалить участника'),
                             icon: const Icon(Icons.person_remove_outlined),
                             onPressed: () async {
                               Navigator.pop(context);
@@ -1209,7 +1235,7 @@ class LedgersPanel extends StatelessWidget {
                                   ledger.id,
                                   m.userId,
                                 ),
-                                success: 'Участник удалён',
+                                success: uiText('Участник удалён'),
                               );
                             },
                           )
@@ -1221,7 +1247,7 @@ class LedgersPanel extends StatelessWidget {
           actions: [
             FilledButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Закрыть'),
+              child: Text(uiText('Закрыть')),
             ),
           ],
         ),
@@ -1242,27 +1268,29 @@ class LedgersPanel extends StatelessWidget {
       case 'rename':
         final name = await askText(
           context,
-          title: 'Переименовать пространство',
-          label: 'Название',
+          title: uiText('Переименовать пространство'),
+          label: uiText('Название'),
           initial: ledger.name,
         );
         if (name != null) await run(() => store.renameLedger(ledger.id, name));
       case 'delete':
         if (await confirmDelete(
           context,
-          'Удалить «${ledger.name}»?',
-          message:
-              'Пространство будет удалено на сервере со всеми записями и '
-              'вложениями для всех участников.',
+          uiText('Удалить «{0}»?', [ledger.name]),
+          message: uiText(
+            'Пространство будет удалено на сервере со всеми записями и вложениями для всех участников.',
+          ),
         )) {
           await run(() => store.deleteLedger(ledger.id));
         }
       case 'leave':
         if (await confirmDelete(
           context,
-          'Выйти из «${ledger.name}»?',
-          message: 'Вернуться можно будет только по новому приглашению.',
-          action: 'Выйти',
+          uiText('Выйти из «{0}»?', [ledger.name]),
+          message: uiText(
+            'Вернуться можно будет только по новому приглашению.',
+          ),
+          action: uiText('Выйти'),
         )) {
           await run(() => store.leaveLedger(ledger.id));
         }
@@ -1295,15 +1323,16 @@ class LedgersPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text(
-          'Общее пространство — отдельный набор операций, счетов и бюджетов, '
-          'который видят все участники. Личные данные в него не переносятся.',
+        Text(
+          uiText(
+            'Общее пространство — отдельный набор операций, счетов и бюджетов, который видят все участники. Личные данные в него не переносятся.',
+          ),
         ),
         const SizedBox(height: 8),
         entry(
           context,
-          title: 'Личное пространство',
-          subtitle: 'Только ваши данные',
+          title: uiText('Личное пространство'),
+          subtitle: uiText('Только ваши данные'),
           active: active == null,
           onOpen: () => run(() => store.selectLedger(null)),
         ),
@@ -1313,17 +1342,18 @@ class LedgersPanel extends StatelessWidget {
             title: l.name,
             subtitle: [
               roleTitle(l.role),
-              if (l.members.isNotEmpty) 'участников: ${l.members.length}',
+              if (l.members.isNotEmpty)
+                uiText('участников: {0}', [l.members.length]),
             ].join(' · '),
             active: active == l.id,
             onOpen: () => run(() => store.selectLedger(l.id)),
-            trailing: _menu('Действия с пространством', {
-              if (active != l.id) 'open': 'Открыть',
-              if (l.isOwner) 'invite': 'Пригласить',
-              'members': 'Участники',
-              if (l.isOwner) 'rename': 'Переименовать',
-              if (l.isOwner) 'delete': 'Удалить',
-              if (!l.isOwner) 'leave': 'Выйти',
+            trailing: _menu(uiText('Действия с пространством'), {
+              if (active != l.id) 'open': uiText('Открыть'),
+              if (l.isOwner) 'invite': uiText('Пригласить'),
+              'members': uiText('Участники'),
+              if (l.isOwner) 'rename': uiText('Переименовать'),
+              if (l.isOwner) 'delete': uiText('Удалить'),
+              if (!l.isOwner) 'leave': uiText('Выйти'),
             }, (v) => onAction(context, l, v)),
           ),
         const SizedBox(height: 12),
@@ -1335,42 +1365,42 @@ class LedgersPanel extends StatelessWidget {
               onPressed: () async {
                 final name = await askText(
                   context,
-                  title: 'Новое пространство',
-                  label: 'Название',
-                  action: 'Создать',
+                  title: uiText('Новое пространство'),
+                  label: uiText('Название'),
+                  action: uiText('Создать'),
                 );
                 if (name != null) {
                   await run(
                     () => store.createLedger(name),
-                    success: 'Пространство создано',
+                    success: uiText('Пространство создано'),
                   );
                 }
               },
               icon: const Icon(Icons.group_add_outlined),
-              label: const Text('Создать'),
+              label: Text(uiText('Создать')),
             ),
             OutlinedButton.icon(
               onPressed: () async {
                 final code = await askText(
                   context,
-                  title: 'Присоединиться',
-                  label: 'Код приглашения',
-                  action: 'Присоединиться',
+                  title: uiText('Присоединиться'),
+                  label: uiText('Код приглашения'),
+                  action: uiText('Присоединиться'),
                 );
                 if (code != null) {
                   await run(
                     () => store.joinLedger(code),
-                    success: 'Вы присоединились к пространству',
+                    success: uiText('Вы присоединились к пространству'),
                   );
                 }
               },
               icon: const Icon(Icons.login),
-              label: const Text('Присоединиться'),
+              label: Text(uiText('Присоединиться')),
             ),
             TextButton.icon(
               onPressed: () => run(store.refreshLedgers),
               icon: const Icon(Icons.refresh),
-              label: const Text('Обновить'),
+              label: Text(uiText('Обновить')),
             ),
           ],
         ),
@@ -1408,7 +1438,7 @@ class AttachmentsSection extends StatefulWidget {
 
   /// Replaced in tests; the default opens the system file picker.
   static Future<XFile?> Function() picker = () => pickFile(
-    'Чек или документ',
+    uiText('Чек или документ'),
     _attachmentTypes.keys.toList(),
     androidMimeTypes: _attachmentTypes.values.toSet().toList(),
   );
@@ -1458,14 +1488,14 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
   Future<void> open(AttachmentRecord a) => guarded(() async {
     final bytes = await store.attachmentBytes(a);
     if (!mounted) return;
-    final name = a.name.isEmpty ? 'файл' : a.name;
+    final name = a.name.isEmpty ? uiText('файл') : a.name;
     final ext = name.contains('.') ? name.split('.').last : 'bin';
     Future<void> save() => saveFile(
       context,
       bytes,
       name: name,
       mimeType: a.contentType,
-      label: 'Вложение',
+      label: uiText('Вложение'),
       extension: ext,
     );
     if (a.contentType == 'image/jpeg' || a.contentType == 'image/png') {
@@ -1481,9 +1511,9 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
                   child: Image.memory(
                     bytes,
                     semanticLabel: name,
-                    errorBuilder: (_, _, _) => const Padding(
+                    errorBuilder: (_, _, _) => Padding(
                       padding: EdgeInsets.all(32),
-                      child: Text('Не удалось показать изображение'),
+                      child: Text(uiText('Не удалось показать изображение')),
                     ),
                   ),
                 ),
@@ -1496,11 +1526,11 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
                     TextButton.icon(
                       onPressed: save,
                       icon: const Icon(Icons.open_in_new),
-                      label: const Text('Открыть или сохранить'),
+                      label: Text(uiText('Открыть или сохранить')),
                     ),
                     FilledButton(
                       onPressed: () => Navigator.pop(context),
-                      child: const Text('Закрыть'),
+                      child: Text(uiText('Закрыть')),
                     ),
                   ],
                 ),
@@ -1515,14 +1545,14 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
   });
 
   Future<void> remove(AttachmentRecord a) async {
-    if (await confirmDelete(context, 'Удалить вложение?')) {
+    if (await confirmDelete(context, uiText('Удалить вложение?'))) {
       await guarded(() => store.deleteAttachment(a.id));
     }
   }
 
   static String size(int bytes) => bytes < 1024 * 1024
-      ? '${(bytes / 1024).ceil()} КБ'
-      : '${(bytes / 1024 / 1024).toStringAsFixed(1)} МБ';
+      ? uiText('{0} КБ', [(bytes / 1024).ceil()])
+      : uiText('{0} МБ', [(bytes / 1024 / 1024).toStringAsFixed(1)]);
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
@@ -1536,7 +1566,7 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
             children: [
               Expanded(
                 child: Text(
-                  'Вложения',
+                  uiText('Вложения'),
                   style: Theme.of(context).textTheme.titleSmall,
                 ),
               ),
@@ -1557,16 +1587,16 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
                     : Icons.image_outlined,
               ),
               title: Text(
-                a.name.isEmpty ? 'Файл' : a.name,
+                a.name.isEmpty ? uiText('Файл') : a.name,
                 overflow: TextOverflow.ellipsis,
               ),
               subtitle: Text(
                 '${size(a.size)}'
-                '${store.isUploadPending(a) ? ' · ждёт загрузки' : ''}',
+                '${store.isUploadPending(a) ? uiText(' · ждёт загрузки') : ''}',
               ),
               onTap: busy ? null : () => open(a),
               trailing: IconButton(
-                tooltip: 'Удалить вложение',
+                tooltip: uiText('Удалить вложение'),
                 icon: const Icon(Icons.delete_outline),
                 onPressed: busy ? null : () => remove(a),
               ),
@@ -1585,12 +1615,12 @@ class _AttachmentsSectionState extends State<AttachmentsSection> {
             child: OutlinedButton.icon(
               onPressed: busy ? null : add,
               icon: const Icon(Icons.attach_file),
-              label: const Text('Прикрепить чек'),
+              label: Text(uiText('Прикрепить чек')),
             ),
           ),
           if (kIsWeb)
             Text(
-              'Файлы хранятся в браузере до загрузки на сервер.',
+              uiText('Файлы хранятся в браузере до загрузки на сервер.'),
               style: Theme.of(context).textTheme.bodySmall,
             ),
         ],

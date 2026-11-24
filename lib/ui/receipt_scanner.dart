@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../l10n/app_strings.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../domain/receipt.dart';
@@ -33,7 +34,7 @@ class _ReceiptScannerState extends State<ReceiptScanner> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Сканировать чек')),
+    appBar: AppBar(title: Text(uiText('Сканировать чек'))),
     body: SafeArea(
       child: Column(
         children: [
@@ -46,8 +47,10 @@ class _ReceiptScannerState extends State<ReceiptScanner> {
                   padding: const EdgeInsets.all(24),
                   child: Text(
                     error.errorCode == MobileScannerErrorCode.permissionDenied
-                        ? 'Разрешите доступ к камере в настройках устройства.'
-                        : 'Не удалось открыть камеру.',
+                        ? uiText(
+                            'Разрешите доступ к камере в настройках устройства.',
+                          )
+                        : uiText('Не удалось открыть камеру.'),
                     textAlign: TextAlign.center,
                   ),
                 ),
@@ -60,8 +63,8 @@ class _ReceiptScannerState extends State<ReceiptScanner> {
               liveRegion: true,
               child: Text(
                 _invalidCode
-                    ? 'Поднесите QR-код кассового чека покупки.'
-                    : 'Наведите камеру на QR-код кассового чека.',
+                    ? uiText('Поднесите QR-код кассового чека покупки.')
+                    : uiText('Наведите камеру на QR-код кассового чека.'),
                 textAlign: TextAlign.center,
               ),
             ),

@@ -111,7 +111,7 @@ class TransactionFilter {
   TransactionFilter withoutAmount() =>
       copyWith(minMinor: () => null, maxMinor: () => null);
 
-  bool matches(TransactionRecord t) {
+  bool matches(TransactionRecord t, {String Function(String)? categoryAlias}) {
     if (kind != 'all' && t.kindRawValue != kind) return false;
     final from = start, to = endExclusive;
     if (from != null && t.date.isBefore(from)) return false;
@@ -129,10 +129,11 @@ class TransactionFilter {
       }
     }
     final q = query.trim().toLowerCase();
-    return q.isEmpty ||
-        '${t.categoryName} ${t.note} ${t.tags.join(' ')}'
-            .toLowerCase()
-            .contains(q);
+    if (q.isEmpty) return true;
+    final details = '${t.note} ${t.tags.join(' ')}';
+    final alias = categoryAlias?.call(t.categoryName);
+    return '${t.categoryName} $details'.toLowerCase().contains(q) ||
+        (alias != null && '$alias $details'.toLowerCase().contains(q));
   }
 
   /// A transfer matches the period, the amount bounds (its source amount)
@@ -171,8 +172,13 @@ class TransactionFilter {
   }
 
   /// Matching transactions in the chosen order; equal amounts newest first.
-  List<TransactionRecord> apply(Iterable<TransactionRecord> items) {
-    final result = items.where(matches).toList();
+  List<TransactionRecord> apply(
+    Iterable<TransactionRecord> items, {
+    String Function(String)? categoryAlias,
+  }) {
+    final result = items
+        .where((item) => matches(item, categoryAlias: categoryAlias))
+        .toList();
     int newestFirst(TransactionRecord a, TransactionRecord b) =>
         b.date.compareTo(a.date);
     result.sort(switch (sort) {
