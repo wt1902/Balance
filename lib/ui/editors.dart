@@ -1,10 +1,17 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 import '../domain/finance.dart';
+import '../domain/pdf_receipt.dart';
+import '../domain/receipt.dart';
 import '../domain/templates.dart';
 import '../services/app_store.dart';
+import '../services/pdf_receipt_reader.dart';
+import 'data_tools.dart' show pickFile;
 import 'design.dart';
+import 'pdf_receipt_preview.dart';
+import 'receipt_scanner.dart';
 import 'v2_common.dart';
 
 const _uuid = Uuid();
@@ -53,6 +60,90 @@ class _TransactionEditorState extends State<TransactionEditor> {
   late String? accountId = widget.existing?.accountId;
   late String? currency = widget.existing?.currency;
   late List<String> tags = widget.existing?.tags ?? const [];
+  bool _scannedReceipt = false;
+  bool _readingPdf = false;
+  String? _pdfError;
+  String? _importedPositions;
+
+  bool get _isNewExpense => widget.existing == null && kind == 'expense';
+
+  bool get _canScanReceipt =>
+      _isNewExpense &&
+      _importedPositions == null &&
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  Future<void> _scanReceipt() async {
+    FocusScope.of(context).unfocus();
+    final receipt = await Navigator.of(
+      context,
+    ).push<Receipt>(MaterialPageRoute(builder: (_) => const ReceiptScanner()));
+    if (!mounted || receipt == null) return;
+    setState(() {
+      amount.text = amountInput(receipt.amountMinor);
+      date = receipt.date;
+      currency = 'RUB';
+      _scannedReceipt = true;
+    });
+  }
+
+  Future<void> _importPdfReceipt() async {
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _readingPdf = true;
+      _pdfError = null;
+    });
+    try {
+      final file = await pickFile(
+        'Электронный чек PDF',
+        const ['pdf'],
+        androidMimeTypes: const ['application/pdf'],
+      );
+      if (!mounted || file == null) return;
+      final receipt = await readPdfReceipt(file);
+      if (!mounted ||
+          !_isNewExpense ||
+          ModalRoute.of(context)?.isCurrent != true) {
+        return;
+      }
+      final confirmed = await Navigator.of(context).push<PdfReceipt>(
+        MaterialPageRoute(builder: (_) => PdfReceiptPreview(receipt: receipt)),
+      );
+      if (!mounted || confirmed == null) return;
+
+      var previous = note.text.trim();
+      final imported = _importedPositions;
+      if (imported != null && previous.endsWith(imported)) {
+        previous = previous
+            .substring(0, previous.length - imported.length)
+            .trimRight();
+      }
+      final detail = confirmed.note;
+      final combined = previous.isEmpty ? detail : '$previous\n\n$detail';
+      if (combined.characters.length > 4000) {
+        throw const FormatException(
+          'Позиции и заметка превышают 4000 символов. '
+          'Сократите заметку или уточните список позиций.',
+        );
+      }
+      setState(() {
+        amount.text = amountInput(confirmed.total!);
+        date = confirmed.date ?? date;
+        currency = 'RUB';
+        note.text = combined;
+        _importedPositions = detail;
+        _scannedReceipt = true;
+      });
+    } on FormatException catch (error) {
+      if (mounted) setState(() => _pdfError = error.message);
+    } catch (_) {
+      if (mounted) setState(() => _pdfError = 'Не удалось прочитать PDF-чек.');
+    } finally {
+      if (mounted) setState(() => _readingPdf = false);
+    }
+  }
+
   List<CategoryRecord> get choices {
     final list = [
       ...BuiltInCategories.forKind(kind),
@@ -116,9 +207,17 @@ class _TransactionEditorState extends State<TransactionEditor> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            widget.existing == null ? 'Новая операция' : 'Изменить операцию',
+            _scannedReceipt
+                ? 'Предпросмотр операции'
+                : widget.existing == null
+                ? 'Новая операция'
+                : 'Изменить операцию',
             style: Theme.of(context).textTheme.headlineSmall,
           ),
+          if (_scannedReceipt) ...[
+            const SizedBox(height: 8),
+            const Text('Проверьте данные чека и выберите категорию и счёт.'),
+          ],
           const SizedBox(height: 24),
           SegmentedButton<String>(
             segments: const [
@@ -141,6 +240,31 @@ class _TransactionEditorState extends State<TransactionEditor> {
                     selected = BuiltInCategories.forKind(kind).first;
                   }),
           ),
+          if (_canScanReceipt) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _readingPdf ? null : _scanReceipt,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: Text(
+                _scannedReceipt ? 'Сканировать снова' : 'Сканировать чек',
+              ),
+            ),
+          ],
+          if (_isNewExpense) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _readingPdf ? null : _importPdfReceipt,
+              icon: const Icon(Icons.picture_as_pdf_outlined),
+              label: Text(
+                _readingPdf ? 'Читаем чек…' : 'Импортировать PDF-чек',
+              ),
+            ),
+            if (_pdfError case final error?)
+              Text(
+                error,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+          ],
           const SizedBox(height: 20),
           TextFormField(
             controller: amount,

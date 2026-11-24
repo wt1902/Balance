@@ -8,6 +8,7 @@ import 'package:quick_actions/quick_actions.dart';
 import '../domain/analytics.dart';
 import '../domain/finance.dart';
 import '../domain/appearance.dart';
+import '../domain/pdf_receipt.dart';
 import '../domain/records.dart';
 import '../domain/templates.dart';
 import '../domain/transaction_filter.dart';
@@ -21,6 +22,7 @@ import 'design.dart';
 import 'editors.dart';
 import 'notifications_panel.dart';
 import 'privacy.dart';
+import 'saved_receipt_page.dart';
 import 'transactions_page.dart';
 import 'v2_common.dart';
 import 'v2_pages.dart';
@@ -995,7 +997,15 @@ class _BalanceShellState extends State<BalanceShell> {
         PopupMenuButton<String>(
           tooltip: 'Действия с операцией',
           onSelected: (v) async {
-            if (v == 'edit') {
+            if (v == 'receipt') {
+              await Navigator.of(context).push<void>(
+                MaterialPageRoute(
+                  builder: (_) => SavedReceiptPage(
+                    positions: PdfReceipt.positionsFromNote(t.note),
+                  ),
+                ),
+              );
+            } else if (v == 'edit') {
               await editTransaction(t);
             } else if (v == 'repeat') {
               await editTransaction(
@@ -1014,6 +1024,11 @@ class _BalanceShellState extends State<BalanceShell> {
             }
           },
           itemBuilder: (_) => [
+            if (PdfReceipt.positionsFromNote(t.note).isNotEmpty)
+              const PopupMenuItem(
+                value: 'receipt',
+                child: Text('Позиции чека'),
+              ),
             const PopupMenuItem(value: 'edit', child: Text('Изменить')),
             // A balance adjustment is not spending to repeat or reuse.
             if (!t.isBalanceAdjustment) ...const [

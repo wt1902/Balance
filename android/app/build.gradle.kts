@@ -26,6 +26,7 @@ android {
 
     defaultConfig {
         applicationId = "com.balance.balance"
+        manifestPlaceholders["balanceAppLabel"] = "Balance"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
@@ -50,6 +51,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["balanceAppLabel"] = "Balance Debug"
+        }
         release {
             // CI builds remain unsigned until a private key.properties is supplied.
             signingConfig = if (releaseSigningFile.exists()) {
