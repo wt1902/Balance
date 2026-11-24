@@ -144,6 +144,20 @@ void main() {
   });
 
   group('widget summary', () {
+    test('caches both language variants from the same ledger', () {
+      final summary = widgetSummary(
+        transactions: [tx('income', 123456, kind: 'income')],
+        budgets: const [],
+        currency: 'RUB',
+        now: now,
+        allLanguages: true,
+      );
+      expect(summary['widget.balance.ru']!.replaceAll(' ', ' '), '1 234,56 ₽');
+      expect(summary['widget.balance.en'], '₽1,234.56');
+      expect(summary['widget.budget.ru'], 'Бюджеты на месяц не заданы');
+      expect(summary['widget.budget.en'], 'No budgets set this month');
+    });
+
     test('balance, month expenses and current month budgets', () {
       final summary = widgetSummary(
         transactions: [
@@ -208,8 +222,10 @@ void main() {
       await store.initialize();
       await store.saveTransaction(tx('e', 4200, date: DateTime.now()));
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('widget.monthExpenses'), contains('42,00'));
-      expect(prefs.getString('widget.balance'), contains('-42,00'));
+      expect(prefs.getString('widget.monthExpenses.ru'), contains('42,00'));
+      expect(prefs.getString('widget.monthExpenses.en'), contains('42.00'));
+      expect(prefs.getString('widget.balance.ru'), contains('-42,00'));
+      expect(prefs.getString('widget.balance.en'), '-₽42.00');
       store.dispose();
     });
   });

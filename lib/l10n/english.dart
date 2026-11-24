@@ -1,4 +1,18 @@
 const english = <String, String>{
+  'Лимит на {0} превышен: израсходовано {1}%':
+      'The {0} budget limit was exceeded: {1}% spent',
+  'Израсходовано {0}% лимита на {1}': 'You’ve spent {0}% of the {1} budget',
+  'Уведомления запрещены. Разрешите их в настройках системы.':
+      'Notifications are blocked. Enable them in system settings.',
+  'Не забудьте записать сегодняшние траты':
+      'Remember to record today’s expenses',
+  'Напоминания': 'Reminders',
+  'Предупреждения о 80% и 100% лимита':
+      'Alerts at 80% and 100% of your budget limit',
+  'Ежедневное напоминание внести траты': 'Daily reminder to record expenses',
+  'Бюджеты на месяц не заданы': 'No budgets set this month',
+  'Остаток бюджета: {0} из {1}': 'Budget remaining: {0} of {1}',
+  'Бюджет превышен на {0}': 'Over budget by {0}',
   'Баланс': 'Balance',
   'Обзор': 'Overview',
   'Операции': 'Transactions',

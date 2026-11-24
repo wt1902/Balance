@@ -1,18 +1,25 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show WidgetsBinding;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
+import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
 import '../domain/finance.dart';
 import '../domain/notifications.dart';
+import '../l10n/app_strings.dart';
 
 /// Where notifications go; the plugin in the app, a fake in tests.
 abstract class NotificationSink {
-  Future<void> initialize(void Function(String payload) onTap);
+  Future<void> initialize(
+    void Function(String payload) onTap, {
+    required String language,
+  });
+  Future<void> setLanguage(String language);
 
   /// The payload of the notification that launched the app, if any.
   Future<String?> launchPayload();
@@ -59,6 +66,15 @@ class Notifications extends ChangeNotifier {
   bool budgetAlerts = false;
   bool reminder = false;
   int reminderHour = 20, reminderMinute = 0;
+  String get _language => effectiveAppLanguage(
+    _prefs?.getString('appLanguage'),
+    WidgetsBinding
+        .instance
+        .platformDispatcher
+        .locales
+        .firstOrNull
+        ?.languageCode,
+  );
 
   /// Tap on a notification: `budget` or `reminder`.
   void Function(String payload)? onTap;
@@ -72,9 +88,13 @@ class Notifications extends ChangeNotifier {
 
   Future<void> initialize() async {
     _prefs = await SharedPreferences.getInstance();
+    await _prefs!.reload();
     _load();
     try {
-      await _sink.initialize((payload) => onTap?.call(payload));
+      await _sink.initialize(
+        (payload) => onTap?.call(payload),
+        language: _language,
+      );
     } catch (_) {
       // Notifications are optional; the app works without them.
     }
@@ -100,8 +120,11 @@ class Notifications extends ChangeNotifier {
 
   Future<void> _requirePermission() async {
     if (!await _sink.requestPermission()) {
-      throw const NotificationException(
-        'Уведомления запрещены. Разрешите их в настройках системы.',
+      throw NotificationException(
+        uiTextFor(
+          _language,
+          'Уведомления запрещены. Разрешите их в настройках системы.',
+        ),
       );
     }
   }
@@ -169,6 +192,8 @@ class Notifications extends ChangeNotifier {
       // Another engine (background sync) may have notified meanwhile.
       await _prefs!.reload();
       _load();
+      final language = _language;
+      await _sink.setLanguage(language);
       if (budgetAlerts) {
         final levels = _levels();
         final alerts = NotificationRules.budgetAlerts(
@@ -183,12 +208,15 @@ class Notifications extends ChangeNotifier {
             levels[NotificationRules.budgetKey(alert.budget)] = alert.threshold;
           }
           await _saveLevels(levels);
-          final month = _months[_clock().toLocal().month - 1];
+          final now = _clock().toLocal();
+          final month = language == 'ru'
+              ? _months[now.month - 1]
+              : DateFormat.LLLL('en_US').format(now);
           for (final alert in alerts) {
             await _sink.show(
               _budgetNotificationId(alert.budget),
-              alert.title,
-              alert.body(month),
+              alert.titleFor(language),
+              alert.body(month, language: language),
               'budget',
             );
           }
@@ -203,18 +231,56 @@ class Notifications extends ChangeNotifier {
     await _sink.cancel(reminderId);
     if (!reminder) return;
     final now = _clock();
-    await _sink.scheduleDaily(
-      reminderId,
-      'Баланс',
-      'Не забудьте записать сегодняшние траты',
+    await _scheduleAt(
       NotificationRules.nextReminder(
         now,
         reminderHour,
         reminderMinute,
         enteredToday: NotificationRules.hasEntryToday(transactions, now),
       ),
+      _language,
+    );
+  }
+
+  /// A system language change can arrive from Android without an open ledger.
+  /// Keep the pending day and time when replacing the localized reminder.
+  Future<void> refreshLanguage() async {
+    if (_prefs == null) return;
+    await _prefs!.reload();
+    _load();
+    final language = _language;
+    await _sink.setLanguage(language);
+    if (!canSchedule ||
+        !reminder ||
+        _prefs!.getString('notify.reminderLanguage') == language) {
+      return;
+    }
+    final now = _clock();
+    final scheduled = DateTime.tryParse(
+      _prefs!.getString('notify.reminderFirst') ?? '',
+    );
+    final first = scheduled != null && scheduled.isAfter(now)
+        ? scheduled
+        : NotificationRules.nextReminder(
+            now,
+            reminderHour,
+            reminderMinute,
+            enteredToday: false,
+          );
+    await _scheduleAt(first, language);
+  }
+
+  Future<void> _scheduleAt(DateTime first, String language) async {
+    await _sink.setLanguage(language);
+    await _sink.scheduleDaily(
+      reminderId,
+      uiTextFor(language, 'Баланс'),
+      uiTextFor(language, 'Не забудьте записать сегодняшние траты'),
+      first,
       'reminder',
     );
+    await _prefs!.setString('notify.reminderFirst', first.toIso8601String());
+    await _prefs!.setString('notify.reminderLanguage', language);
   }
 
   /// Stable per budget and month, away from the reminder id.
@@ -250,32 +316,38 @@ class NotificationException implements Exception {
 class PluginNotificationSink implements NotificationSink {
   final _plugin = FlutterLocalNotificationsPlugin();
   bool _timeZoneReady = false;
+  String? _language;
 
-  static const _budgetDetails = NotificationDetails(
+  NotificationDetails get _budgetDetails => NotificationDetails(
     android: AndroidNotificationDetails(
       'budget',
-      'Бюджеты',
-      channelDescription: 'Предупреждения о 80% и 100% лимита',
+      _localized('Бюджеты'),
+      channelDescription: _localized('Предупреждения о 80% и 100% лимита'),
       visibility: NotificationVisibility.private,
     ),
     iOS: DarwinNotificationDetails(),
     macOS: DarwinNotificationDetails(),
-    linux: LinuxNotificationDetails(),
+    linux: LinuxNotificationDetails(defaultActionName: _localized('Открыть')),
     windows: WindowsNotificationDetails(),
   );
 
-  static const _reminderDetails = NotificationDetails(
+  NotificationDetails get _reminderDetails => NotificationDetails(
     android: AndroidNotificationDetails(
       'reminder',
-      'Напоминания',
-      channelDescription: 'Ежедневное напоминание внести траты',
+      _localized('Напоминания'),
+      channelDescription: _localized('Ежедневное напоминание внести траты'),
     ),
     iOS: DarwinNotificationDetails(),
     macOS: DarwinNotificationDetails(),
   );
 
+  String _localized(String message) => uiTextFor(_language ?? 'en', message);
+
   @override
-  Future<void> initialize(void Function(String payload) onTap) async {
+  Future<void> initialize(
+    void Function(String payload) onTap, {
+    required String language,
+  }) async {
     // Permissions are asked when the user turns a notification on.
     const darwin = DarwinInitializationSettings(
       requestAlertPermission: false,
@@ -283,21 +355,61 @@ class PluginNotificationSink implements NotificationSink {
       requestSoundPermission: false,
     );
     await _plugin.initialize(
-      settings: const InitializationSettings(
-        android: AndroidInitializationSettings('@drawable/ic_stat_balance'),
+      settings: InitializationSettings(
+        android: const AndroidInitializationSettings(
+          '@drawable/ic_stat_balance',
+        ),
         iOS: darwin,
         macOS: darwin,
-        linux: LinuxInitializationSettings(defaultActionName: 'Открыть'),
+        linux: LinuxInitializationSettings(
+          defaultActionName: uiTextFor(language, 'Открыть'),
+        ),
         windows: WindowsInitializationSettings(
-          appName: 'Баланс',
+          appName: uiTextFor(language, 'Баланс'),
           appUserModelId: 'Balance.Balance',
           guid: '5f1f6c3e-7a5b-4c2e-9a41-0d3b8e6f2c17',
         ),
-        web: WebInitializationSettings(),
+        web: const WebInitializationSettings(),
       ),
       onDidReceiveNotificationResponse: (response) =>
           onTap(response.payload ?? ''),
     );
+    await setLanguage(language);
+  }
+
+  @override
+  Future<void> setLanguage(String language) async {
+    if (_language == language) return;
+    _language = language;
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return;
+    final android = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
+    if (android == null) return;
+    try {
+      final channels = await android.getNotificationChannels() ?? [];
+      for (final channel in channels) {
+        final details = switch (channel.id) {
+          'budget' => _budgetDetails.android,
+          'reminder' => _reminderDetails.android,
+          _ => null,
+        };
+        if (details == null) continue;
+        await android.createNotificationChannel(
+          AndroidNotificationChannel(
+            channel.id,
+            details.channelName,
+            description: details.channelDescription,
+            importance: channel.importance,
+            groupId: channel.groupId,
+            showBadge: channel.showBadge,
+          ),
+        );
+      }
+    } catch (_) {
+      // Channel labels are optional on devices without notification channels.
+    }
   }
 
   @override

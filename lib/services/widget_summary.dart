@@ -1,5 +1,6 @@
 import '../domain/finance.dart';
 import '../domain/money_format.dart';
+import '../l10n/app_strings.dart';
 
 /// Home-screen widget lines, written as preformatted strings to shared
 /// preferences (`flutter.widget.*`) where the native Android widget reads them.
@@ -11,22 +12,28 @@ Map<String, String> widgetSummary({
   required String currency,
   required DateTime now,
   int? balanceMinor,
+  bool allLanguages = false,
 }) {
   final items = transactions.toList();
   final start = FinanceMath.monthStart(now.toLocal());
   final month = FinanceMath.summary(items, start, FinanceMath.nextMonth(start));
   final budget = FinanceMath.monthBudgets(budgets, items, now);
   final left = budget.limitMinor - budget.usedMinor;
-  return {
-    'widget.balance': money(
-      balanceMinor ?? FinanceMath.totalBalance(items),
-      currency,
-    ),
-    'widget.monthExpenses': money(month.expensesMinor, currency),
-    'widget.budget': budget.count == 0
-        ? 'Бюджеты на месяц не заданы'
+  final balance = balanceMinor ?? FinanceMath.totalBalance(items);
+  final result = <String, String>{};
+  for (final language in allLanguages ? const ['ru', 'en'] : const ['ru']) {
+    final suffix = allLanguages ? '.$language' : '';
+    String format(int minor) => money(minor, currency, locale: language);
+    result['widget.balance$suffix'] = format(balance);
+    result['widget.monthExpenses$suffix'] = format(month.expensesMinor);
+    result['widget.budget$suffix'] = budget.count == 0
+        ? uiTextFor(language, 'Бюджеты на месяц не заданы')
         : left >= 0
-        ? 'Остаток бюджета: ${money(left, currency)} из ${money(budget.limitMinor, currency)}'
-        : 'Бюджет превышен на ${money(-left, currency)}',
-  };
+        ? uiTextFor(language, 'Остаток бюджета: {0} из {1}', [
+            format(left),
+            format(budget.limitMinor),
+          ])
+        : uiTextFor(language, 'Бюджет превышен на {0}', [format(-left)]);
+  }
+  return result;
 }

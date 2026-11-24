@@ -1,3 +1,5 @@
+import 'dart:ui' show Locale;
+
 import 'package:balance_flutter/domain/finance.dart';
 import 'package:balance_flutter/domain/notifications.dart';
 import 'package:balance_flutter/services/notifications.dart';
@@ -8,9 +10,16 @@ class FakeSink implements NotificationSink {
   bool permission = true;
   final shown = <(int, String, String, String)>[];
   final scheduled = <(int, DateTime, String)>[];
+  final reminderTexts = <(String, String)>[];
+  String? language;
   final cancelled = <int>[];
   @override
-  Future<void> initialize(void Function(String payload) onTap) async {}
+  Future<void> initialize(
+    void Function(String payload) onTap, {
+    required String language,
+  }) async => this.language = language;
+  @override
+  Future<void> setLanguage(String language) async => this.language = language;
   @override
   Future<String?> launchPayload() async => null;
   @override
@@ -25,7 +34,11 @@ class FakeSink implements NotificationSink {
     String body,
     DateTime first,
     String payload,
-  ) async => scheduled.add((id, first, payload));
+  ) async {
+    scheduled.add((id, first, payload));
+    reminderTexts.add((title, body));
+  }
+
   @override
   Future<void> cancel(int id) async => cancelled.add(id);
 }
@@ -200,6 +213,54 @@ void main() {
       );
       expect(sink.shown, hasLength(1));
     });
+
+    test('background budget alert uses the manual preference', () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('appLanguage', 'en');
+      await prefs.setBool('notify.budget', true);
+      final background = Notifications(sink: sink, clock: () => clock);
+      addTearDown(background.dispose);
+      await background.initialize();
+      await background.ledgerChanged(
+        budgets: [budget('food', 10000)],
+        transactions: [spend('a', 8000)],
+      );
+      expect(sink.language, 'en');
+      expect(sink.shown.single.$2, 'Budget “Groceries”');
+      expect(sink.shown.single.$3, 'You’ve spent 80% of the October budget');
+    });
+
+    test(
+      'language refresh preserves the next reminder across engine startup',
+      () async {
+        final dispatcher =
+            TestWidgetsFlutterBinding.instance.platformDispatcher;
+        dispatcher.localesTestValue = const [Locale('ru')];
+        await service.setReminder(
+          true,
+          transactions: [spend('t', 100, date: now)],
+        );
+        expect(sink.reminderTexts.single.$1, 'Баланс');
+        final first = sink.scheduled.single.$2;
+        expect(first, DateTime(2026, 10, 16, 20));
+        final cancels = sink.cancelled.length;
+
+        dispatcher.localesTestValue = const [Locale('fr')];
+        final background = Notifications(sink: sink, clock: () => clock);
+        addTearDown(background.dispose);
+        await background.initialize();
+        await background.refreshLanguage();
+        await background.refreshLanguage();
+        expect(sink.language, 'en');
+        expect(sink.scheduled, hasLength(2));
+        expect(sink.scheduled.last.$2, first);
+        expect(sink.cancelled, hasLength(cancels));
+        expect(sink.reminderTexts.last, (
+          'Balance',
+          'Remember to record today’s expenses',
+        ));
+      },
+    );
 
     test('permission denied keeps notifications off', () async {
       sink.permission = false;

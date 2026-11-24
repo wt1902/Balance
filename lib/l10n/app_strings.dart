@@ -9,8 +9,14 @@ String appLocale = 'en';
 
 const appLocales = [Locale('en'), Locale('ru')];
 
+String effectiveAppLanguage(String? preference, String? systemLanguage) =>
+    switch (preference) {
+      'en' || 'ru' => preference!,
+      _ => systemLanguage == 'ru' ? 'ru' : 'en',
+    };
+
 Locale resolveAppLocale(Locale? locale, Iterable<Locale> supported) =>
-    locale?.languageCode == 'ru' ? const Locale('ru') : const Locale('en');
+    Locale(effectiveAppLanguage(null, locale?.languageCode));
 
 final _placeholder = RegExp(r'\{(\d+)\}');
 
@@ -49,8 +55,10 @@ const _builtInCategoryNames = <String, String>{
 
 // Category names are keys in budgets and synchronization. Translate their
 // labels at the UI boundary, without changing the stored values.
-String categoryTitle(String name) =>
-    appLocale == 'en' ? _builtInCategoryNames[name] ?? name : name;
+String categoryTitle(String name, {String? language}) =>
+    (language ?? appLocale) == 'en'
+    ? _builtInCategoryNames[name] ?? name
+    : name;
 
 String localDecimal(String value) =>
     appLocale == 'en' ? value.replaceAll(',', '.') : value;

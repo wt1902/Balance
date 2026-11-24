@@ -1,4 +1,5 @@
 import 'finance.dart';
+import '../l10n/app_strings.dart';
 
 /// A budget of the current month that crossed 80% or 100% of its limit.
 class BudgetAlert {
@@ -13,12 +14,22 @@ class BudgetAlert {
   final int threshold;
   final int percent;
 
-  String get title => 'Бюджет «${budget.categoryName}»';
+  String get title => titleFor('ru');
+
+  String titleFor(String language) => uiTextFor(language, 'Бюджет «{0}»', [
+    categoryTitle(budget.categoryName, language: language),
+  ]);
 
   /// Percentages only: notifications can show on a lock screen, so no amounts.
-  String body(String monthName) => threshold >= 100
-      ? 'Лимит на $monthName превышен: израсходовано $percent%'
-      : 'Израсходовано $percent% лимита на $monthName';
+  String body(String monthName, {String language = 'ru'}) => threshold >= 100
+      ? uiTextFor(language, 'Лимит на {0} превышен: израсходовано {1}%', [
+          monthName,
+          percent,
+        ])
+      : uiTextFor(language, 'Израсходовано {0}% лимита на {1}', [
+          percent,
+          monthName,
+        ]);
 }
 
 class NotificationRules {
