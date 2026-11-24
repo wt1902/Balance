@@ -1,5 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="widget_description">Баланс, траты за месяц и остаток бюджета</string>
+    <string name="widget_description">Balance, monthly expenses, and budget remaining</string>
+    <string name="widget_title">Balance</string>
+    <string name="widget_add_expense">Add expense</string>
+    <string name="widget_open_app">Open the app</string>
+    <string name="widget_month_expenses">Monthly expenses: %1$s</string>
+    <string name="widget_preview_balance">₽128,450.00</string>
+    <string name="widget_preview_expenses">Monthly expenses: ₽21,300.00</string>
+    <string name="widget_preview_budget">Budget remaining: ₽8,700.00 of ₽30,000.00</string>
     <string name="tile_label">Расход</string>
 </resources>

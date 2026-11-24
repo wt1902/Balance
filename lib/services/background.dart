@@ -6,15 +6,35 @@ import 'package:workmanager/workmanager.dart';
 
 import 'app_store.dart';
 import 'notifications.dart';
+import 'runtime_lock.dart';
 
 const _periodicSyncName = 'balance-periodic-sync';
 const _syncTask = 'balance.finance.sync';
+const _notificationLanguageTask = 'balance.notifications.language';
 
 @pragma('vm:entry-point')
 void balanceBackgroundDispatcher() {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
   Workmanager().executeTask((task, inputData) async {
+    if (task == _notificationLanguageTask) {
+      final notifications = Notifications();
+      final lock = RuntimeLock();
+      try {
+        await lock.acquire();
+        try {
+          await notifications.initialize();
+          await notifications.refreshLanguage();
+        } finally {
+          await lock.release();
+        }
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        notifications.dispose();
+      }
+    }
     if (task != _syncTask) return true;
     final store = AppStore(background: true);
     var success = false;

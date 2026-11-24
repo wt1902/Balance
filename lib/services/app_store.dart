@@ -1695,6 +1695,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
         currency: baseCurrency,
         now: DateTime.now(),
         balanceMinor: balanceMinor,
+        allLanguages: true,
       );
       if (mapEquals(next, _widgetSummary)) return;
       for (final entry in next.entries) {
@@ -1721,6 +1722,7 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
       throw StateError('Could not save the app language');
     }
     _appLanguage = value;
+    _widgetSummary = null;
     _notify();
   });
   Future<void> setTheme(String value) => _exclusive(() async {
@@ -2277,6 +2279,11 @@ class AppStore extends ChangeNotifier with WidgetsBindingObserver {
 
   void _backgroundSync() {
     if (ready && session != null) unawaited(sync().catchError((Object _) {}));
+  }
+
+  @override
+  void didChangeLocales(List<Locale>? locales) {
+    if (ready && !_disposed && _appLanguage == 'system') notifyListeners();
   }
 
   @override

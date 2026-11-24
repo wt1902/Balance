@@ -18,7 +18,12 @@ class FakeSink implements NotificationSink {
   final cancels = <int>[];
 
   @override
-  Future<void> initialize(void Function(String payload) onTap) async {}
+  Future<void> initialize(
+    void Function(String payload) onTap, {
+    required String language,
+  }) async {}
+  @override
+  Future<void> setLanguage(String language) async {}
   @override
   Future<String?> launchPayload() async => launch;
   @override

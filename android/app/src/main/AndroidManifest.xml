@@ -49,6 +49,11 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/balance_widget_info" />
         </receiver>
+        <receiver android:name=".AppLocaleReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.LOCALE_CHANGED" />
+            </intent-filter>
+        </receiver>
         <receiver
             android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
             android:exported="false" />
